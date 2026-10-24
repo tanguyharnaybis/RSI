@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="PWA pour calculer le Reactive Strength Index à partir de vidéos de drop jump en slow-motion">
+  <meta name="theme-color" content="#1a1a2e">
+  <title>RSI Calc - Calculateur Reactive Strength Index</title>
+
+  <link rel="manifest" href="./manifest.json">
+  <link rel="icon" type="image/svg+xml" href="./favicon.svg">
+
+  <style>
+    /* ============================================
+       RSI Calc - Styles (thème sombre, mobile-first)
+       ============================================ */
+    :root {
+      --bg-primary: #1a1a2e;
+      --bg-secondary: #16213e;
+      --bg-tertiary: #0f3460;
+      --bg-card: rgba(255, 255, 255, 0.05);
+      --text-primary: #ffffff;
+      --text-secondary: #b8b8cc;
+      --text-muted: #7a7a92;
+      --primary: #e94560;
+      --success: #4caf50;
+      --warning: #ff9800;
+      --danger: #f44336;
+      --border: rgba(255, 255, 255, 0.12);
+      --radius: 12px;
+      --spacing: 16px;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html { font-size: 16px; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, sans-serif;
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      line-height: 1.5;
+      min-height: 100vh;
+      padding-bottom: 48px;
+    }
+
+    /* ---------- Loader ---------- */
+    #loading-fallback {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      background: var(--bg-primary);
+      z-index: 9999;
+    }
+    #loading-fallback.hidden { display: none; }
+    .spinner {
+      width: 48px; height: 48px;
+      border: 4px solid var(--bg-tertiary);
+      border-top-color: var(--primary);
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #loading-error { color: var(--danger); max-width: 85%; text-align: center; font-size: 14px; white-space: pre-wrap; }
+
+    /* ---------- Layout ---------- */
+    .container {
+      width: 100%;
+      max-width: 760px;
+      margin: 0 auto;
+      padding: 0 var(--spacing);
+    }
+
+    header.app-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 20px 0 12px;
+    }
+    header.app-header h1 { font-size: 1.6rem; }
+    header.app-header .subtitle { font-size: 0.85rem; color: var(--text-secondary); }
+    .header-actions { display: flex; gap: 8px; }
+
+    .section {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: var(--spacing);
+      margin-bottom: var(--spacing);
+    }
+    .section h2 {
+      font-size: 1.05rem;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .hint { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 10px; }
+
+    /* ---------- Boutons ---------- */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      min-height: 48px;
+      padding: 10px 16px;
+      font-size: 1rem;
+      font-weight: 600;
+      color: #fff;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      cursor: pointer;
+      transition: filter 0.15s ease, transform 0.1s ease;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+    }
+    .btn:active { transform: scale(0.97); }
+    .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+    .btn-primary { background: var(--primary); border-color: var(--primary); }
+    .btn-success { background: var(--success); border-color: var(--success); }
+    .btn-warning { background: var(--warning); border-color: var(--warning); color: #1a1a2e; }
+    .btn-danger { background: var(--danger); border-color: var(--danger); }
+    .btn-sm { min-height: 36px; padding: 6px 10px; font-size: 0.85rem; }
+    .btn-block { width: 100%; }
+
+    .button-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 10px;
+    }
+    .button-grid .span-2 { grid-column: span 2; }
+
+    /* ---------- Vidéo ---------- */
+    #drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 28px 16px;
+      text-align: center;
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: border-color 0.2s ease, background 0.2s ease;
+    }
+    #drop-zone:hover, #drop-zone.drag-over { border-color: var(--primary); background: rgba(233, 69, 96, 0.08); }
+    #drop-zone .dz-icon { font-size: 2rem; margin-bottom: 8px; }
+
+    .video-wrapper {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      background: #000;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .video-wrapper video {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+      transition: transform 0.25s ease;
+      transform-origin: 50% 85%;
+    }
+    .video-wrapper.zoomed video { transform: scale(2); }
+
+    .video-controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      margin-top: 12px;
+    }
+    .video-controls .btn { min-width: 56px; }
+    .video-controls select {
+      min-height: 48px;
+      padding: 6px 10px;
+      border-radius: 10px;
+      background: var(--bg-secondary);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+      font-size: 0.95rem;
+    }
+    #frame-counter {
+      font-variant-numeric: tabular-nums;
+      font-size: 0.95rem;
+      color: var(--text-secondary);
+      margin-left: auto;
+    }
+
+    /* ---------- Timeline ---------- */
+    .timeline-wrap { margin-top: 12px; }
+    .timeline {
+      position: relative;
+      height: 52px;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      cursor: pointer;
+      overflow: hidden;
+    }
+    .timeline-fill {
+      position: absolute; top: 0; left: 0;
+      width: 0; height: 100%;
+      background: rgba(233, 69, 96, 0.25);
+      pointer-events: none;
+    }
+    .timeline-thumb {
+      position: absolute; top: 0;
+      width: 3px; height: 100%;
+      background: var(--primary);
+      transform: translateX(-50%);
+      pointer-events: none;
+    }
+    .tl-marker {
+      position: absolute; top: 0;
+      width: 3px; height: 100%;
+      transform: translateX(-50%);
+      pointer-events: none;
+    }
+    .tl-marker.landing { background: var(--success); }
+    .tl-marker.takeoff { background: var(--warning); }
+    .tl-marker.finalLanding { background: var(--danger); }
+
+    /* ---------- Formulaires ---------- */
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+    .form-group { display: flex; flex-direction: column; gap: 4px; }
+    .form-group label { font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); }
+    .form-group input {
+      min-height: 48px;
+      padding: 8px 12px;
+      font-size: 1rem;
+      background: var(--bg-secondary);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+    }
+    .form-group input:focus { outline: 2px solid rgba(233, 69, 96, 0.5); border-color: var(--primary); }
+
+    /* ---------- Marqueurs ---------- */
+    #marker-status {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 12px;
+      font-size: 0.85rem;
+    }
+    .marker-chip {
+      padding: 5px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      color: var(--text-muted);
+      background: var(--bg-secondary);
+    }
+    .marker-chip.set { color: var(--text-primary); border-color: currentColor; }
+    .marker-chip.set.landing { color: var(--success); }
+    .marker-chip.set.takeoff { color: var(--warning); }
+    .marker-chip.set.finalLanding { color: var(--danger); }
+
+    /* ---------- Résultats ---------- */
+    .results-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+      gap: 10px;
+    }
+    .result-item {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px 8px;
+      text-align: center;
+    }
+    .result-label {
+      display: block;
+      font-size: 0.7rem;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+    }
+    .result-value { font-size: 1.5rem; font-weight: 700; color: var(--primary); }
+    .result-value.highlight { color: #ffd54f; }
+    .result-unit { font-size: 0.8rem; color: var(--text-secondary); margin-left: 3px; }
+
+    .session-stats {
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid var(--border);
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px 18px;
+    }
+    .session-stats strong { color: var(--text-primary); }
+
+    /* ---------- Historique ---------- */
+    .session-item {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 12px 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .session-item:last-child { border-bottom: none; }
+    .session-item .s-name { font-weight: 600; }
+    .session-item .s-meta { font-size: 0.82rem; color: var(--text-muted); }
+    .session-item .s-actions { display: flex; gap: 6px; }
+    .empty-state { color: var(--text-muted); font-size: 0.9rem; text-align: center; padding: 16px 0; }
+
+    /* ---------- Graphique ---------- */
+    .chart-box { position: relative; height: 280px; }
+
+    /* ---------- Guide ---------- */
+    .guide-list { list-style: none; }
+    .guide-list li {
+      display: flex;
+      gap: 10px;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.92rem;
+    }
+    .guide-list li:last-child { border-bottom: none; }
+    .guide-list .check { color: var(--success); font-weight: 700; }
+    .formula { font-family: ui-monospace, Consolas, monospace; background: var(--bg-secondary); padding: 1px 5px; border-radius: 4px; font-size: 0.85em; }
+
+    /* ---------- Alertes ---------- */
+    #alert-container {
+      position: fixed;
+      top: 12px; left: 50%;
+      transform: translateX(-50%);
+      z-index: 10000;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      width: min(92vw, 420px);
+    }
+    .alert {
+      padding: 10px 14px;
+      border-radius: 10px;
+      font-size: 0.9rem;
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+      border: 1px solid var(--border);
+      box-shadow: 0 8px 20px rgba(0,0,0,0.4);
+      animation: slideIn 0.25s ease;
+    }
+    .alert-success { border-color: var(--success); }
+    .alert-error { border-color: var(--danger); }
+    .alert-info { border-color: var(--primary); }
+    @keyframes slideIn { from { opacity: 0; transform: translateY(-12px); } to { opacity: 1; transform: translateY(0); } }
+
+    /* ---------- Thème clair ---------- */
+    body.light-theme {
+      --bg-primary: #f2f3f7;
+      --bg-secondary: #ffffff;
+      --bg-tertiary: #e4e7ef;
+      --bg-card: #ffffff;
+      --text-primary: #1a1a2e;
+      --text-secondary: #4a4a66;
+      --text-muted: #8a8aa0;
+      --border: rgba(0, 0, 0, 0.14);
+    }
+
+    /* ---------- Mobile ---------- */
+    @media (max-width: 480px) {
+      .form-row { grid-template-columns: 1fr; }
+      .button-grid { grid-template-columns: repeat(2, 1fr); }
+      #frame-counter { width: 100%; margin-left: 0; text-align: center; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Écran de chargement (masqué une fois l'app initialisée) -->
+  <div id="loading-fallback">
+    <div class="spinner" role="status" aria-label="Chargement"></div>
+    <div>Chargement de RSI Calc...</div>
+    <div id="loading-error"></div>
+  </div>
+
+  <div class="container" id="app">
+
+    <!-- En-tête -->
+    <header class="app-header">
+      <div>
+        <h1>RSI Calc</h1>
+        <div class="subtitle">Reactive Strength Index — Drop Jump</div>
+      </div>
+      <div class="header-actions">
+        <button id="btn-theme" class="btn btn-sm" title="Basculer le thème">Thème</button>
+      </div>
+    </header>
+
+    <!-- 1. Import vidéo -->
+    <section class="section">
+      <h2>1. Vidéo du drop jump</h2>
+      <p class="hint">Filmez en strict profil, à 240 fps minimum (slow-motion). Mains sur les hanches.</p>
+      <div id="drop-zone" role="button" tabindex="0" aria-label="Importer une vidéo">
+        <div class="dz-icon">📹</div>
+        <div><strong>Importer une vidéo</strong></div>
+        <div class="hint" style="margin:4px 0 0">MP4, WebM, MOV — ou glissez-déposez ici</div>
+      </div>
+      <input type="file" id="file-input" accept="video/*" hidden>
+
+      <div id="video-section" style="display:none">
+        <div class="video-wrapper" id="video-wrapper">
+          <video id="video-element" playsinline muted></video>
+        </div>
+
+        <div class="video-controls">
+          <button id="btn-prev-frame" class="btn" title="Frame précédent">◀</button>
+          <button id="btn-play-pause" class="btn btn-primary" title="Lecture / Pause">▶</button>
+          <button id="btn-next-frame" class="btn" title="Frame suivant">▶|</button>
+          <select id="playback-rate" aria-label="Vitesse de lecture">
+            <option value="0.25">x0.25</option>
+            <option value="0.5" selected>x0.5</option>
+            <option value="1">x1</option>
+          </select>
+          <button id="btn-zoom" class="btn" title="Zoom sur la zone des pieds">🔍 Zoom</button>
+          <span id="frame-counter">Frame 0 / 0</span>
+        </div>
+
+        <div class="timeline-wrap">
+          <div class="timeline" id="timeline" aria-label="Timeline vidéo">
+            <div class="timeline-fill" id="timeline-fill"></div>
+            <div class="timeline-thumb" id="timeline-thumb"></div>
+          </div>
+          <div class="hint" id="video-info"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. Paramètres -->
+    <section class="section">
+      <h2>2. Paramètres</h2>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="fps-input">FPS de la vidéo</label>
+          <input type="number" id="fps-input" min="1" max="1000" step="1" value="240" inputmode="numeric">
+        </div>
+        <div class="form-group">
+          <label for="gravity-input">Gravité (m/s²)</label>
+          <input type="number" id="gravity-input" min="1" max="20" step="0.01" value="9.81" inputmode="decimal">
+        </div>
+      </div>
+      <p class="hint">Le FPS ne peut pas être détecté automatiquement : vérifiez les réglages de votre caméra (240 par défaut pour un slow-mo smartphone).</p>
+    </section>
+
+    <!-- 3. Marquage -->
+    <section class="section">
+      <h2>3. Marquage des frames</h2>
+      <p class="hint">Naviguez frame par frame puis marquez : 1) premier contact des orteils, 2) dernier contact au décollage, 3) nouvel atterrissage.</p>
+      <div class="button-grid">
+        <button id="btn-mark-landing" class="btn btn-success">1. Atterrissage</button>
+        <button id="btn-mark-takeoff" class="btn btn-warning">2. Décollage</button>
+        <button id="btn-mark-final-landing" class="btn btn-danger">3. Atterrissage final</button>
+        <button id="btn-reset-markers" class="btn">Réinitialiser</button>
+      </div>
+      <div id="marker-status">
+        <span class="marker-chip" id="chip-landing">Atterrissage : —</span>
+        <span class="marker-chip" id="chip-takeoff">Décollage : —</span>
+        <span class="marker-chip" id="chip-finalLanding">Atterrissage final : —</span>
+      </div>
+      <div style="margin-top:14px">
+        <button id="btn-calculate" class="btn btn-primary btn-block" disabled>Calculer le RSI</button>
+      </div>
+    </section>
+
+    <!-- 4. Résultats -->
+    <section class="section">
+      <h2>4. Résultats</h2>
+      <div id="results-content">
+        <p class="empty-state">Marquez les 3 frames puis cliquez sur « Calculer le RSI ».</p>
+      </div>
+      <div id="session-stats" class="session-stats" style="display:none"></div>
+    </section>
+
+    <!-- 5. Session -->
+    <section class="section">
+      <h2>5. Session</h2>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="session-name-input">Nom de la session</label>
+          <input type="text" id="session-name-input" placeholder="ex : Drop Jump 30 cm">
+        </div>
+        <div class="form-group">
+          <label for="drop-height-input">Hauteur de drop (cm)</label>
+          <input type="number" id="drop-height-input" min="5" max="100" step="1" value="30" inputmode="numeric">
+        </div>
+      </div>
+      <div class="button-grid" style="margin-top:12px">
+        <button id="btn-new-session" class="btn btn-primary">Nouvelle session</button>
+        <button id="btn-save-trial" class="btn btn-success">Sauvegarder l'essai</button>
+        <button id="btn-export-csv" class="btn btn-sm">Export CSV</button>
+        <button id="btn-export-json" class="btn btn-sm">Export JSON</button>
+      </div>
+    </section>
+
+    <!-- 6. Historique -->
+    <section class="section">
+      <h2>6. Historique</h2>
+      <div id="history-list">
+        <p class="empty-state">Aucune session enregistrée.</p>
+      </div>
+    </section>
+
+    <!-- 7. Progression -->
+    <section class="section">
+      <h2>7. Progression (RSI moyen par session)</h2>
+      <div class="chart-box">
+        <canvas id="progress-chart" aria-label="Graphique de progression du RSI"></canvas>
+      </div>
+    </section>
+
+    <!-- 8. Guide -->
+    <section class="section">
+      <h2>Guide du protocole</h2>
+      <ul class="guide-list">
+        <li><span class="check">✓</span><span>Filmer à <strong>240 fps minimum</strong> (slow-motion smartphone)</span></li>
+        <li><span class="check">✓</span><span>Téléphone en <strong>strict profil</strong>, à hauteur du sol, fixe</span></li>
+        <li><span class="check">✓</span><span><strong>Mains sur les hanches</strong> pendant le saut</span></li>
+        <li><span class="check">✓</span><span>Atterrir et décoller <strong>pointes tendues</strong> (même position)</span></li>
+        <li><span class="check">✓</span><span><strong>3 à 5 essais</strong> par hauteur de drop</span></li>
+        <li><span class="check">✓</span><span>Marquer précisément : atterrissage → décollage → atterrissage final</span></li>
+      </ul>
+      <p class="hint" style="margin-top:10px">
+        Temps de contact <span class="formula">(f2 − f1) / fps</span> ·
+        Temps de vol <span class="formula">(f3 − f2) / fps</span> ·
+        Hauteur <span class="formula">g·t_vol² / 8</span> ·
+        RSI <span class="formula">hauteur / t_contact</span> ·
+        RSI modifié <span class="formula">hauteur / t_total</span>
+      </p>
+    </section>
+
+  </div>
+
+  <div id="alert-container" aria-live="polite"></div>
+
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

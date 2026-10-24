@@ -1,0 +1,32 @@
+# Enable LF line endings for all text files
+* text=auto eol=lf
+
+# Deny merge drivers for specific files
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.svg text
+*.woff binary
+*.woff2 binary
+
+# Ensure consistent line endings in shell scripts
+*.sh text eol=lf
+*.bash text eol=lf
+
+# JSON files should be pretty-printed
+*.json diff=json
+
+# TypeScript files
+*.ts text eol=lf
+*.tsx text eol=lf
+
+# HTML files
+*.html text eol=lf
+
+# CSS files
+*.css text eol=lf
+
+# Manifest
+manifest.json text eol=lf
