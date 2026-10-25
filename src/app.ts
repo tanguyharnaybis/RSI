@@ -8,7 +8,7 @@ import Chart from 'chart.js/auto';
 import type { Session, Trial, VideoMetadata, VideoFrame, MarkerPoints } from './types';
 import { calculateRSI, formatRSIResult } from './calculation';
 import { FrameByFramePlayer } from './video/player';
-import { extractVideoMetadata, validateVideoFile, computeFrameCount, formatDuration } from './video/loader';
+import { extractVideoMetadata, validateVideoFile, computeFrameCount, formatDuration, detectPlaybackFps } from './video/loader';
 import { createMarkerManager, MARKER_TYPES } from './annotation';
 import type { MarkerType } from './annotation';
 import { createLocalStorageService } from './storage';
@@ -288,7 +288,22 @@ async function handleVideoUpload(file: File): Promise<void> {
     height: el.videoElement.videoHeight,
     fps,
   };
-  currentVideo.frameCount = computeFrameCount(duration, currentVideo.fps);
+
+  // Détecter le FPS de lecture du conteneur (brève lecture muette)
+  // Pour une vidéo slow-mo exportée (ex. iPhone 240 fps), le conteneur est
+  // lu à ~30 fps : c'est LUI qui sert à la navigation frame-par-frame,
+  // tandis que le FPS d'enregistrement (240) sert aux calculs.
+  const playbackFps = await detectPlaybackFps(el.videoElement);
+  el.videoElement.pause();
+  el.videoElement.currentTime = 0;
+
+  if (playbackFps && playbackFps > 0) {
+    currentVideo.playbackFps = playbackFps;
+  } else {
+    // API indisponible : on suppose que lecture = enregistrement
+    currentVideo.playbackFps = currentVideo.fps;
+  }
+  currentVideo.frameCount = computeFrameCount(duration, currentVideo.playbackFps);
 
   initVideoPlayer(currentVideo);
   resetMarkers();
@@ -298,10 +313,14 @@ async function handleVideoUpload(file: File): Promise<void> {
   updateVideoInfo();
   updateFrameUI(0);
 
-  const ratioNote = currentVideo.isSlowMotion
-    ? ''
-    : ' Astuce : entrez le FPS réel d\'enregistrement (ex. 240) dans les paramètres.';
-  showAlert(`Vidéo chargée : ${currentVideo.frameCount} frames à ${currentVideo.fps} fps.${ratioNote}`, 'success');
+  const slowdown = currentVideo.fps / currentVideo.playbackFps;
+  const ratioNote = slowdown > 1.05
+    ? ` Vidéo ralentie ×${slowdown.toFixed(1)} — FPS d'enregistrement : ${currentVideo.fps}.`
+    : '';
+  showAlert(
+    `Vidéo chargée : ${currentVideo.frameCount} frames (lecture ${Math.round(currentVideo.playbackFps)} fps).${ratioNote}`,
+    'success'
+  );
 }
 
 function initVideoPlayer(metadata: VideoMetadata): void {
@@ -344,21 +363,28 @@ function applyFps(fps: number): void {
   if (!currentVideo) return;
 
   currentVideo.fps = valid;
-  currentVideo.frameCount = computeFrameCount(currentVideo.duration, valid);
+  // Le compteur de frames reste basé sur le FPS de lecture (navigation)
+  const playback = currentVideo.playbackFps ?? currentVideo.fps;
+  currentVideo.frameCount = computeFrameCount(currentVideo.duration, playback);
   markerManager.initialize(currentVideo.frameCount);
   if (videoPlayer) {
     videoPlayer.setMetadata({ fps: valid, frameCount: currentVideo.frameCount });
   }
   updateVideoInfo();
   updateFrameUI(videoPlayer?.getCurrentFrame() ?? 0);
-  showAlert(`FPS mis à jour : ${valid}`, 'info');
+  showAlert(`FPS d'enregistrement mis à jour : ${valid}`, 'info');
 }
 
 function updateVideoInfo(): void {
   if (!currentVideo) return;
+  const playback = currentVideo.playbackFps ?? currentVideo.fps;
+  const slowdown = currentVideo.fps / playback;
   el.videoInfo.textContent =
     `${currentVideo.width}×${currentVideo.height} · ${formatDuration(currentVideo.duration)} · ` +
-    `${currentVideo.fps} fps · ${currentVideo.frameCount} frames`;
+    `${currentVideo.frameCount} frames · lecture ${Math.round(playback)} fps` +
+    (slowdown > 1.05
+      ? ` · ralenti ×${slowdown.toFixed(1)} · enregistrement ${currentVideo.fps} fps`
+      : ` · ${currentVideo.fps} fps`);
 }
 
 function updateFrameUI(frame: number): void {

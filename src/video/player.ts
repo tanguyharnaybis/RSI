@@ -16,6 +16,17 @@ export class FrameByFramePlayer implements VideoPlayer {
   private isInitialized: boolean = false;
 
   /**
+   * FPS utilisé pour la navigation frame-par-frame.
+   * Il s'agit du FPS de lecture du conteneur (playbackFps) quand il est
+   * connu — typiquement ~30 pour une vidéo slow-mo ralentie à l'export —
+   * sinon du FPS d'enregistrement.
+   */
+  private get navFps(): number {
+    const playback = this.metadata.playbackFps;
+    return playback && playback > 0 ? playback : this.metadata.fps;
+  }
+
+  /**
    * Crée un nouveau lecteur frame-par-frame
    * @param video - Élement vidéo à contrôler
    * @param metadata - Métadonnées de la vidéo
@@ -182,7 +193,7 @@ export class FrameByFramePlayer implements VideoPlayer {
    * @returns Numéro du frame
    */
   getFrameAtTime(time: number): number {
-    const frame = Math.round(time * this.metadata.fps);
+    const frame = Math.round(time * this.navFps);
     return Math.max(0, Math.min(frame, this.metadata.frameCount - 1));
   }
 
@@ -192,7 +203,7 @@ export class FrameByFramePlayer implements VideoPlayer {
    * @returns Temps en secondes
    */
   getTimeAtFrame(frame: number): number {
-    return frame / this.metadata.fps;
+    return frame / this.navFps;
   }
 
   /**

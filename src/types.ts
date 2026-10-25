@@ -33,6 +33,7 @@ export interface VideoMetadata {
   height: number;
   isSlowMotion: boolean;
   detectedFps?: number; // FPS détecté automatiquement
+  playbackFps?: number; // FPS de lecture du conteneur (navigation frame-par-frame)
 }
 
 // ============================================
