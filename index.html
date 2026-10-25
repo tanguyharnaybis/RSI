@@ -437,6 +437,20 @@
           </div>
           <div class="hint" id="video-info"></div>
         </div>
+
+        <div class="timeline-wrap" style="margin-top:8px">
+          <button id="btn-ffmpeg-analyze" class="btn btn-block" disabled>Indexer les frames exactes (ffmpeg)</button>
+          <div id="ffmpeg-status" class="hint" style="display:none" aria-live="polite"></div>
+          <div id="ffmpeg-progress" style="display:none; margin-top:6px; height:8px; background:var(--bg-secondary); border-radius:999px; overflow:hidden">
+            <div id="ffmpeg-progress-fill" style="height:100%; width:0%; background:var(--primary); transition:width 0.2s ease"></div>
+          </div>
+          <p class="hint" style="margin-top:6px">
+            L'analyse décode la vidéo et indexe le <strong>timestamp exact</strong> de chaque frame :
+            navigation et calculs deviennent exacts même à cadence variable (VFR), le temps réel entre
+            deux frames étant une différence de timestamps. Premier usage : téléchargement du moteur
+            (~32&nbsp;Mo), ensuite en cache et hors ligne.
+          </p>
+        </div>
       </div>
     </section>
 

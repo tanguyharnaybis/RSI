@@ -1,11 +1,11 @@
 {
   "name": "rsi-calc",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "PWA mobile-first pour calculer le Reactive Strength Index à partir de vidéos de drop jump",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
+    "dev": "node scripts/copy-ffmpeg-core.mjs && vite",
+    "build": "node scripts/copy-ffmpeg-core.mjs && vite build",
     "preview": "vite preview",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
@@ -15,17 +15,20 @@
     "frames:test": "node scripts/test-extraction.mjs"
   },
   "dependencies": {
+    "@ffmpeg/ffmpeg": "^0.12.15",
+    "@ffmpeg/util": "^0.12.2",
     "chart.js": "^4.4.1"
   },
   "devDependencies": {
+    "@ffmpeg/core": "^0.12.10",
     "@types/node": "^20.11.16",
     "@vitest/coverage-v8": "^1.2.2",
     "ffmpeg-static": "^5.2.0",
     "ffprobe-static": "^3.1.0",
+    "jsdom": "^23.0.1",
     "typescript": "^5.3.3",
     "vite": "^5.0.12",
-    "vitest": "^1.2.2",
-    "jsdom": "^23.0.1"
+    "vitest": "^1.2.2"
   },
   "keywords": [
     "RSI",

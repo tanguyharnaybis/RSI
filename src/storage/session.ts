@@ -3,8 +3,8 @@
  * Contient la logique métier pour la création et gestion des sessions
  */
 
-import type { Session, Trial, MarkerPoints, VideoMetadata } from '../types';
-import { calculateRSI, formatRSIResult } from '../calculation';
+import type { Session, Trial, MarkerPoints, VideoMetadata, VideoFrame } from '../types';
+import { calculateRSI, calculateRSIFromTimestamps, formatRSIResult } from '../calculation';
 
 /**
  * Génère un ID unique
@@ -12,6 +12,53 @@ import { calculateRSI, formatRSIResult } from '../calculation';
  */
 function generateId(): string {
   return `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+}
+
+/**
+ * Crée un nouvel essai à partir des timestamps RÉELS des frames marquées
+ * (méthode VFR-exact : le temps entre deux frames est une différence de
+ * timestamps, correcte même quand la cadence varie au fil de la vidéo).
+ * @param sessionId - ID de la session
+ * @param frames - Numéros de frames marquées
+ * @param times - Temps réels correspondants (secondes)
+ * @param metadata - Métadonnées vidéo (descriptif)
+ * @param gravity - Gravité (m/s²)
+ * @returns Nouvel essai
+ */
+export function createTrialFromTimestamps(
+  sessionId: string,
+  frames: { landing: number; takeoff: number; finalLanding: number },
+  times: { landing: number; takeoff: number; finalLanding: number },
+  metadata: VideoMetadata,
+  gravity: number = 9.81
+): Trial {
+  const result = calculateRSIFromTimestamps(
+    times.landing,
+    times.takeoff,
+    times.finalLanding,
+    gravity
+  );
+  const formattedResult = formatRSIResult(result);
+
+  const mkFrame = (frameNumber: number, timestamp: number): VideoFrame => ({
+    frameNumber,
+    timestamp,
+  });
+
+  return {
+    id: generateId(),
+    sessionId,
+    timestamp: Date.now(),
+    markers: {
+      landing: mkFrame(frames.landing, times.landing),
+      takeoff: mkFrame(frames.takeoff, times.takeoff),
+      finalLanding: mkFrame(frames.finalLanding, times.finalLanding),
+    },
+    metadata: { ...metadata },
+    result,
+    formattedResult,
+    notes: '',
+  };
 }
 
 /**

@@ -3,15 +3,16 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { 
-  calculateRSI, 
-  formatRSIResult, 
+import {
+  calculateRSI,
+  calculateRSIFromTimestamps,
+  formatRSIResult,
   calculateStats,
   validateFrames,
   validateVideoMetadata,
   secondsToMs,
   metersToCm,
-  DEFAULT_GRAVITY 
+  DEFAULT_GRAVITY
 } from '../src/calculation/formulas';
 
 describe('calculateRSI', () => {
@@ -84,6 +85,38 @@ describe('calculateRSI', () => {
     
     // hauteur = 9.81 * (0.25)^2 / 8 = 9.81 * 0.0625 / 8 = 0.0766m
     expect(result.height).toBeCloseTo(0.0766, 3);
+  });
+});
+
+describe('calculateRSIFromTimestamps (méthode VFR-exact)', () => {
+  it('devrait donner les mêmes résultats que le calcul par frames en cadence constante', () => {
+    // Équivalent de calculateRSI(100, 120, 150, 240) à cadence constante :
+    // t1 = 100/240, t2 = 120/240, t3 = 150/240
+    const byFrames = calculateRSI(100, 120, 150, 240);
+    const byTimestamps = calculateRSIFromTimestamps(100 / 240, 120 / 240, 150 / 240);
+
+    expect(byTimestamps.contactTime).toBeCloseTo(byFrames.contactTime, 10);
+    expect(byTimestamps.flightTime).toBeCloseTo(byFrames.flightTime, 10);
+    expect(byTimestamps.height).toBeCloseTo(byFrames.height, 10);
+    expect(byTimestamps.rsi).toBeCloseTo(byFrames.rsi, 10);
+    expect(byTimestamps.modifiedRsi).toBeCloseTo(byFrames.modifiedRsi, 10);
+  });
+
+  it('devrait gérer une cadence variable (VFR) : intervalles irréguliers', () => {
+    // Drop jump VFR : atterrissage à t=1.000, contact irrégulier,
+    // décollage à t=1.083, vol à cadence différente, retour à t=1.208
+    const result = calculateRSIFromTimestamps(1.000, 1.083, 1.208);
+
+    expect(result.contactTime).toBeCloseTo(0.083, 6);
+    expect(result.flightTime).toBeCloseTo(0.125, 6);
+    expect(result.height).toBeCloseTo(9.81 * 0.125 ** 2 / 8, 10);
+    expect(result.rsi).toBeCloseTo((9.81 * 0.125 ** 2 / 8) / 0.083, 6);
+  });
+
+  it('devrait rejeter des timestamps désordonnés', () => {
+    expect(() => calculateRSIFromTimestamps(1, 1, 2)).toThrow('atterrissage doit être avant');
+    expect(() => calculateRSIFromTimestamps(0, 2, 1)).toThrow('décollage doit être avant');
+    expect(() => calculateRSIFromTimestamps(NaN, 1, 2)).toThrow('Timestamps invalides');
   });
 });
 

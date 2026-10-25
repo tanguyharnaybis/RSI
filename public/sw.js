@@ -6,7 +6,7 @@
  * sous-chemin (GitHub Pages).
  */
 
-const CACHE_NAME = 'rsi-calc-v2';
+const CACHE_NAME = 'rsi-calc-v3';
 const OFFLINE_URLS = ['./', './index.html', './manifest.json', './favicon.svg'];
 
 self.addEventListener('install', (event) => {

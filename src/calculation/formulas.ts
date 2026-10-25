@@ -74,6 +74,46 @@ export function calculateRSI(
 }
 
 /**
+ * Calcule le RSI à partir des timestamps RÉELS des frames marquées
+ * (méthode VFR-exact : le temps entre deux frames est une différence de
+ * timestamps, correcte même quand la cadence varie au fil de la vidéo).
+ * @param landingTime - Temps réel de l'atterrissage (s)
+ * @param takeoffTime - Temps réel du décollage (s)
+ * @param finalLandingTime - Temps réel de l'atterrissage final (s)
+ * @param gravity - Accélération gravitationnelle (m/s²)
+ * @returns Résultats du calcul RSI
+ */
+export function calculateRSIFromTimestamps(
+  landingTime: number,
+  takeoffTime: number,
+  finalLandingTime: number,
+  gravity: number = DEFAULT_GRAVITY
+): RSIResult {
+  if (!Number.isFinite(landingTime) || !Number.isFinite(takeoffTime) || !Number.isFinite(finalLandingTime)) {
+    throw new Error('Timestamps invalides');
+  }
+  if (gravity <= 0) {
+    throw new Error('La gravité doit être supérieure à 0');
+  }
+  if (landingTime >= takeoffTime) {
+    throw new Error('Le frame d\'atterrissage doit être avant le frame de décollage');
+  }
+  if (takeoffTime >= finalLandingTime) {
+    throw new Error('Le frame de décollage doit être avant le frame d\'atterrissage final');
+  }
+
+  const contactTime = takeoffTime - landingTime;
+  const flightTime = finalLandingTime - takeoffTime;
+  const totalTime = contactTime + flightTime;
+
+  const height = gravity * Math.pow(flightTime, 2) / 8;
+  const rsi = contactTime > 0 ? height / contactTime : 0;
+  const modifiedRsi = totalTime > 0 ? height / totalTime : 0;
+
+  return { contactTime, flightTime, height, rsi, modifiedRsi, totalTime };
+}
+
+/**
  * Formate les résultats RSI pour affichage
  * @param result - Résultats RSI à formater
  * @returns Résultats formatés pour l'interface utilisateur

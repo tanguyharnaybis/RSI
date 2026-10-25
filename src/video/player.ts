@@ -3,7 +3,7 @@
  * Permet de naviguer frame par frame dans une vidéo
  */
 
-import type { VideoMetadata, VideoPlayer } from '../types';
+import type { VideoMetadata, VideoPlayer, FrameIndex } from '../types';
 import { diffRatio, FRAME_DIFF_THRESHOLD, computeDuplicationHint, computeConfirmedDuplicationFactor } from './frameDiff';
 
 // Taille de l'empreinte visuelle d'une frame (réduite pour la rapidité)
@@ -27,6 +27,9 @@ export class FrameByFramePlayer implements VideoPlayer {
   private duplicationHint = 1;
   private navigationBusy = false;
   private lastConfirmedSample = -1;
+
+  // Index ffmpeg des timestamps exacts (VFR) — optionnel
+  private timestampIndex: FrameIndex | null = null;
 
   /**
    * FPS utilisé pour la navigation frame-par-frame.
@@ -158,20 +161,71 @@ export class FrameByFramePlayer implements VideoPlayer {
 
   /**
    * Va à un frame spécifique.
-   * Le seek vise le CENTRE de la frame ((frame + 0,5) / fps) : viser la
-   * frontière exacte (frame / fps) provoque des erreurs d'arrondi où le
-   * navigateur affiche la frame précédente — donnant l'impression que
-   * des frames sont dupliquées.
+   * Le seek vise le CENTRE de la frame : (frame + 0,5) / fps pour un flux
+   * à cadence constante, ou le milieu de [pts_n, pts_{n+1}] quand l'index
+   * ffmpeg des timestamps exacts est disponible (cadence variable gérée).
+   * Viser la frontière exacte provoque des erreurs d'arrondi où le
+   * navigateur affiche la frame précédente.
    * @param frame - Numéro du frame
    */
   goToFrame(frame: number): void {
     const clampedFrame = Math.max(0, Math.min(frame, this.metadata.frameCount - 1));
     this.currentFrame = clampedFrame;
 
-    const time = (clampedFrame + 0.5) / this.navFps;
-    this.video.currentTime = time;
+    this.video.currentTime = this.frameTime(clampedFrame);
 
     this.emit('video:frame:changed', clampedFrame);
+  }
+
+  /**
+   * Temps vidéo exact du centre d'une frame :
+   * - avec l'index ffmpeg : milieu des timestamps réels [pts_n, pts_{n+1}]
+   *   (correct en VFR, quand l'intervalle varie au fil du fichier)
+   * - sinon : centre à cadence constante supposée
+   */
+  private frameTime(frame: number): number {
+    const index = this.timestampIndex;
+    if (index && frame < index.ptsTimes.length) {
+      const start = index.ptsTimes[frame];
+      const end =
+        frame + 1 < index.ptsTimes.length
+          ? index.ptsTimes[frame + 1]
+          : start + (index.medianInterval || 1 / this.navFps);
+      return (start + end) / 2;
+    }
+    return (frame + 0.5) / this.navFps;
+  }
+
+  /**
+   * Fournit l'index ffmpeg des timestamps exacts (active le seek VFR).
+   * @param index - Index des frames, ou null pour le désactiver
+   */
+  setTimestampIndex(index: FrameIndex | null): void {
+    this.timestampIndex = index;
+    this.lastConfirmedSample = -1; // forcer un re-seek exact
+  }
+
+  /**
+   * Index de la frame couvrant un temps vidéo donné.
+   * Avec l'index ffmpeg : recherche binaire dans les timestamps réels
+   * (exact en VFR). Sans index : cadence constante supposée.
+   */
+  private frameAtVideoTime(time: number): number {
+    const index = this.timestampIndex;
+    if (!index || index.ptsTimes.length === 0) {
+      return Math.max(0, Math.round(time * this.navFps));
+    }
+    const pts = index.ptsTimes;
+    let lo = 0;
+    let hi = pts.length - 1;
+    if (time < pts[0]) return 0;
+    if (time >= pts[hi]) return hi;
+    while (lo < hi - 1) {
+      const mid = (lo + hi) >> 1;
+      if (pts[mid] <= time) lo = mid;
+      else hi = mid;
+    }
+    return lo;
   }
 
   /**
@@ -458,8 +512,8 @@ export class FrameByFramePlayer implements VideoPlayer {
    */
   private async seekAndWait(sample: number): Promise<void> {
     if (sample === this.lastConfirmedSample) return;
-    // Viser le centre du sample (évite les erreurs d'arrondi de frontière)
-    const time = (sample + 0.5) / this.navFps;
+    // Viser le centre de la frame (timestamps exacts si index ffmpeg)
+    const time = this.frameTime(sample);
     const video = this.video;
     await new Promise<void>((resolve) => {
       let settled = false;
@@ -475,7 +529,7 @@ export class FrameByFramePlayer implements VideoPlayer {
         const check = (_now: number, meta: { mediaTime: number }) => {
           if (settled) return;
           // La frame présentée correspond-elle au sample visé ?
-          if (Math.round(meta.mediaTime * this.navFps) === sample) {
+          if (this.frameAtVideoTime(meta.mediaTime) === sample) {
             window.clearTimeout(timeoutId);
             done();
           } else {

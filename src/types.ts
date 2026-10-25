@@ -24,6 +24,25 @@ export interface MarkerPoints {
 // Métadonnées vidéo
 // ============================================
 
+// ============================================
+// Index des timestamps (analyse ffmpeg)
+// ============================================
+
+/**
+ * Index exact des frames d'une vidéo, construit par décodage ffmpeg.
+ * Chaque frame porte son timestamp vidéo réel (pts_time) : le temps
+ * entre deux frames se calcule par différence, exact même en VFR
+ * (cadence variable au fil du fichier).
+ */
+export interface FrameIndex {
+  /** Nombre réel de frames décodées (référence absolue) */
+  frameCount: number;
+  /** Temps vidéo (secondes) de chaque frame, dans l'ordre de décodage */
+  ptsTimes: Float64Array;
+  /** Intervalle vidéo médian entre frames consécutives (secondes) */
+  medianInterval: number;
+}
+
 /** Métadonnées de la vidéo chargée */
 export interface VideoMetadata {
   duration: number; // en secondes

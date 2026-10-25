@@ -6,15 +6,17 @@
 
 import Chart from 'chart.js/auto';
 import type { Session, Trial, VideoMetadata, VideoFrame, MarkerPoints } from './types';
-import { calculateRSI, formatRSIResult } from './calculation';
+import { calculateRSI, calculateRSIFromTimestamps, formatRSIResult } from './calculation';
 import { FrameByFramePlayer } from './video/player';
 import { extractVideoMetadata, validateVideoFile, computeFrameCount, formatDuration, detectPlaybackFps } from './video/loader';
 import { parseMp4FileMetadata } from './video/metadataParser';
+import { analyzeVideoFrames, disposeFFmpegEngine } from './video/ffmpegIndex';
+import type { FrameIndex } from './types';
 import { createMarkerManager, MARKER_TYPES } from './annotation';
 import type { MarkerType } from './annotation';
 import { createLocalStorageService } from './storage';
 import type { LocalStorageService } from './storage';
-import { createSession, createTrialFromMarkers } from './storage/session';
+import { createSession, createTrialFromMarkers, createTrialFromTimestamps } from './storage/session';
 import { calculateSessionStats, getProgressChartData } from './stats';
 import { clamp } from './utils/helpers';
 
@@ -27,6 +29,8 @@ const markerManager = createMarkerManager();
 
 let videoPlayer: FrameByFramePlayer | null = null;
 let currentVideo: VideoMetadata | null = null;
+let currentFile: File | null = null;
+let frameIndex: FrameIndex | null = null;
 let currentSession: Session | null = null;
 let sessions: Session[] = [];
 let gravity = 9.81;
@@ -81,6 +85,10 @@ const el = {
   get chartCanvas() { return $<HTMLCanvasElement>('progress-chart'); },
   get btnTheme() { return $<HTMLButtonElement>('btn-theme'); },
   get alertContainer() { return $('alert-container'); },
+  get btnFfmpegAnalyze() { return $<HTMLButtonElement>('btn-ffmpeg-analyze'); },
+  get ffmpegStatus() { return $('ffmpeg-status'); },
+  get ffmpegProgress() { return $('ffmpeg-progress'); },
+  get ffmpegProgressFill() { return $('ffmpeg-progress-fill'); },
 };
 
 // ============================================
@@ -227,6 +235,9 @@ function bindEvents(): void {
 
   // Thème
   el.btnTheme.addEventListener('click', toggleTheme);
+
+  // Analyse exacte (ffmpeg)
+  el.btnFfmpegAnalyze.addEventListener('click', () => void runFfmpegAnalysis());
 }
 
 // ============================================
@@ -282,6 +293,9 @@ async function handleVideoUpload(file: File): Promise<void> {
     );
     return;
   }
+
+  currentFile = file;
+  frameIndex = null;
 
   const fps = clamp(parseFloat(el.fpsInput.value) || metadata.fps, 1, 1000);
   currentVideo = {
@@ -341,9 +355,11 @@ async function handleVideoUpload(file: File): Promise<void> {
     setNavigationEnabled(false);
     el.videoInfo.textContent =
       'FPS de lecture non déterminé — saisissez-le dans les Paramètres (ex. 30) pour activer la navigation.';
+    el.btnFfmpegAnalyze.disabled = false; // l'analyse ffmpeg reste possible
     showAlert(
       'Impossible de déterminer le FPS de lecture automatiquement. ' +
-      'Saisissez le FPS de lecture dans les Paramètres (ex. 30 pour un export slow-mo étiré) puis validez.',
+      'Saisissez le FPS de lecture dans les Paramètres (ex. 30 pour un export slow-mo étiré) ' +
+      '— ou lancez l\'indexation ffmpeg (bouton sous la vidéo) pour tout déterminer exactement.',
       'error'
     );
     return;
@@ -352,6 +368,7 @@ async function handleVideoUpload(file: File): Promise<void> {
   initVideoPlayer(currentVideo);
   resetMarkers();
   setNavigationEnabled(true);
+  el.btnFfmpegAnalyze.disabled = false;
   updateVideoInfo();
   updateFrameUI(0);
 
@@ -487,13 +504,18 @@ function updateVideoInfo(): void {
   const slowdown = (currentVideo.fps * duplication) / playback;
   // Durée réelle de la scène = frames / (fps d'enregistrement × duplication)
   const realDuration = currentVideo.frameCount / (currentVideo.fps * duplication);
+  const indexBadge = frameIndex
+    ? ` · index ffmpeg : ${frameIndex.frameCount} frames, timestamps exacts` +
+      (temporalFactor() > 1 ? ` (étirement ×${temporalFactor()})` : '')
+    : '';
   el.videoInfo.textContent =
     `${currentVideo.width}×${currentVideo.height} · ${formatDuration(currentVideo.duration)} · ` +
     `${currentVideo.frameCount} frames · lecture ${Math.round(playback)} fps` +
     (duplication > 1 ? ` · frames dupliquées ×${duplication}` : '') +
     (slowdown > 1.05
       ? ` · ralenti ×${slowdown.toFixed(1)} · temps réel ≈ ${realDuration.toFixed(1)} s`
-      : ` · ${currentVideo.fps} fps`);
+      : ` · ${currentVideo.fps} fps`) +
+    indexBadge;
 }
 
 function updateFrameUI(frame: number): void {
@@ -631,8 +653,124 @@ function notifyDuplicationDetected(): void {
 }
 
 // ============================================
-// Calcul RSI
+// Analyse exacte des frames (ffmpeg.wasm)
 // ============================================
+
+let ffmpegAnalyzing = false;
+
+function ffmpegSetStatus(text: string | null): void {
+  if (text) {
+    el.ffmpegStatus.textContent = text;
+    el.ffmpegStatus.style.display = 'block';
+  } else {
+    el.ffmpegStatus.style.display = 'none';
+  }
+}
+
+function ffmpegSetProgress(ratio: number | null): void {
+  if (ratio === null) {
+    el.ffmpegProgress.style.display = 'none';
+    el.ffmpegProgressFill.style.width = '0%';
+  } else {
+    el.ffmpegProgress.style.display = 'block';
+    el.ffmpegProgressFill.style.width = `${Math.round(ratio * 100)}%`;
+  }
+}
+
+/**
+ * Facteur temporel k : rapport entre l'intervalle vidéo médian des frames
+ * et la période de capture réelle (1/fps d'enregistrement). k = 1 quand la
+ * vidéo est à la cadence de capture (fichiers iPhone originaux) ; k > 1
+ * pour un export étiré (durée ×k). Temps réel = temps vidéo / k.
+ */
+function temporalFactor(): number {
+  if (!frameIndex || !currentVideo) return 1;
+  return Math.max(1, Math.round(frameIndex.medianInterval * currentVideo.fps));
+}
+
+/** Temps réel d'une frame depuis l'index ffmpeg (VFR-exact) */
+function realTimeOfFrame(frameNumber: number): number | null {
+  if (!frameIndex || frameNumber < 0 || frameNumber >= frameIndex.ptsTimes.length) {
+    return null;
+  }
+  return frameIndex.ptsTimes[frameNumber] / temporalFactor();
+}
+
+async function runFfmpegAnalysis(): Promise<void> {
+  if (!currentVideo || !currentFile || ffmpegAnalyzing) return;
+  ffmpegAnalyzing = true;
+  el.btnFfmpegAnalyze.disabled = true;
+  el.btnFfmpegAnalyze.textContent = 'Analyse en cours…';
+  ffmpegSetProgress(0);
+
+  try {
+    if (frameIndex) {
+      // Relance : réinitialiser l'état précédent
+      frameIndex = null;
+      videoPlayer?.setTimestampIndex(null);
+    }
+
+    ffmpegSetStatus('Téléchargement du moteur ffmpeg…');
+    ffmpegSetProgress(null);
+    const index = await analyzeVideoFrames(currentFile, {
+      onDownloadProgress: (ratio) => {
+        ffmpegSetStatus(
+          `Téléchargement du moteur ffmpeg… ${Math.round(ratio * 100)} % (une seule fois, puis en cache)`
+        );
+        ffmpegSetProgress(ratio);
+      },
+      onDecodeProgress: (ratio) => {
+        ffmpegSetStatus('Décodage de la vidéo et indexation des timestamps…');
+        ffmpegSetProgress(ratio);
+      },
+    });
+
+    frameIndex = index;
+    videoPlayer?.setTimestampIndex(index);
+
+    // Le comptage réel de ffmpeg fait foi : synchroniser le compteur
+    if (currentVideo.frameCount !== index.frameCount) {
+      currentVideo.frameCount = index.frameCount;
+      markerManager.clearAllMarkers();
+      updateMarkerChips();
+      if (videoPlayer) {
+        videoPlayer.setMetadata({ frameCount: index.frameCount });
+      }
+      showAlert(
+        `Comptage corrigé par l'index ffmpeg : ${index.frameCount} frames réelles.`,
+        'info'
+      );
+    }
+
+    ffmpegSetStatus(null);
+    ffmpegSetProgress(null);
+    el.btnFfmpegAnalyze.textContent = 'Frames indexées ✓ (relancer)';
+    updateVideoInfo();
+    updateFrameUI(videoPlayer?.getCurrentFrame() ?? 0);
+
+    const k = temporalFactor();
+    showAlert(
+      `Index ffmpeg : ${index.frameCount} frames, timestamps exacts ` +
+      `(intervalle vidéo médian ${frameIndex.medianInterval.toFixed(4)} s` +
+      (k > 1 ? `, étirement ×${k}` : ', cadence de capture') +
+      `). Calculs maintenant exacts même à cadence variable.`,
+      'success'
+    );
+  } catch (error) {
+    console.error('[RSI Calc] Analyse ffmpeg :', error);
+    ffmpegSetStatus(`Échec : ${error instanceof Error ? error.message : String(error)}`);
+    ffmpegSetProgress(null);
+    el.btnFfmpegAnalyze.textContent = 'Réessayer l\'indexation (ffmpeg)';
+    // Libérer le moteur en cas d'erreur mémoire pour permettre un nouvel essai
+    if (/memory|allocation|abort/i.test(String(error))) {
+      disposeFFmpegEngine();
+      ffmpegSetStatus(`Échec (mémoire insuffisante) : ${error instanceof Error ? error.message : error}. Réessayez.`);
+    }
+  } finally {
+    ffmpegAnalyzing = false;
+    el.btnFfmpegAnalyze.disabled = false;
+  }
+}
 
 function calculateRSIFromMarkers(): void {
   if (!currentVideo || !markerManager.areMarkersValid()) {
@@ -646,20 +784,33 @@ function calculateRSIFromMarkers(): void {
   const finalLanding = markers.finalLanding!;
 
   try {
-    // FPS effectif = cadence d'enregistrement × facteur de duplication :
-    // dans une vidéo où chaque image est dupliquée ×N, N samples
-    // représentent une seule frame réelle (1/fps s).
-    const effectiveFps = currentVideo.fps * getDuplicationFactor();
-    const result = calculateRSI(
-      landing.frameNumber,
-      takeoff.frameNumber,
-      finalLanding.frameNumber,
-      effectiveFps,
-      gravity
-    );
+    // Priorité à la méthode VFR-exact : temps réels issus de l'index
+    // ffmpeg (différence de timestamps — correcte même si la cadence
+    // varie au fil de la vidéo).
+    const t1 = realTimeOfFrame(landing.frameNumber);
+    const t2 = realTimeOfFrame(takeoff.frameNumber);
+    const t3 = realTimeOfFrame(finalLanding.frameNumber);
+
+    let result;
+    let method: string;
+    if (t1 !== null && t2 !== null && t3 !== null) {
+      result = calculateRSIFromTimestamps(t1, t2, t3, gravity);
+      method = 'timestamps exacts (ffmpeg, VFR)';
+    } else {
+      // Sans index : cadence supposée constante (fps × duplication)
+      const effectiveFps = currentVideo.fps * getDuplicationFactor();
+      result = calculateRSI(
+        landing.frameNumber,
+        takeoff.frameNumber,
+        finalLanding.frameNumber,
+        effectiveFps,
+        gravity
+      );
+      method = 'cadence constante supposée';
+    }
     const formatted = formatRSIResult(result);
     displayResults(formatted);
-    showAlert('RSI calculé.', 'success');
+    showAlert(`RSI calculé (${method}).`, 'success');
   } catch (error) {
     console.error(error);
     showAlert(`Erreur de calcul : ${error instanceof Error ? error.message : String(error)}`, 'error');
@@ -739,15 +890,35 @@ async function saveCurrentTrial(): Promise<void> {
     return;
   }
 
-  // Stocker le FPS effectif dans l'essai (enregistrement × duplication) :
-  // les recalculs et exports resteront justes avec les samples marqués.
-  const effectiveMetadata = { ...currentVideo, fps: currentVideo.fps * getDuplicationFactor() };
-  const trial: Trial = createTrialFromMarkers(
-    currentSession.id,
-    markerManager.getAllMarkers(),
-    effectiveMetadata,
-    gravity
-  );
+  // Priorité à la méthode VFR-exact (timestamps réels de l'index ffmpeg) ;
+  // sinon cadence constante supposée (fps d'enregistrement × duplication).
+  const markers = markerManager.getAllMarkers();
+  const t1 = realTimeOfFrame(markers.landing!.frameNumber);
+  const t2 = realTimeOfFrame(markers.takeoff!.frameNumber);
+  const t3 = realTimeOfFrame(markers.finalLanding!.frameNumber);
+
+  let trial: Trial;
+  if (t1 !== null && t2 !== null && t3 !== null) {
+    trial = createTrialFromTimestamps(
+      currentSession.id,
+      {
+        landing: markers.landing!.frameNumber,
+        takeoff: markers.takeoff!.frameNumber,
+        finalLanding: markers.finalLanding!.frameNumber,
+      },
+      { landing: t1, takeoff: t2, finalLanding: t3 },
+      currentVideo,
+      gravity
+    );
+  } else {
+    const effectiveMetadata = { ...currentVideo, fps: currentVideo.fps * getDuplicationFactor() };
+    trial = createTrialFromMarkers(
+      currentSession.id,
+      markers,
+      effectiveMetadata,
+      gravity
+    );
+  }
 
   try {
     await storage.addTrial(currentSession.id, trial);
