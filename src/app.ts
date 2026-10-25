@@ -9,6 +9,7 @@ import type { Session, Trial, VideoMetadata, VideoFrame, MarkerPoints } from './
 import { calculateRSI, formatRSIResult } from './calculation';
 import { FrameByFramePlayer } from './video/player';
 import { extractVideoMetadata, validateVideoFile, computeFrameCount, formatDuration, detectPlaybackFps } from './video/loader';
+import { parseMp4FileMetadata } from './video/metadataParser';
 import { createMarkerManager, MARKER_TYPES } from './annotation';
 import type { MarkerType } from './annotation';
 import { createLocalStorageService } from './storage';
@@ -289,21 +290,36 @@ async function handleVideoUpload(file: File): Promise<void> {
     fps,
   };
 
-  // Détecter le FPS de lecture du conteneur (brève lecture muette)
-  // Pour une vidéo slow-mo exportée (ex. iPhone 240 fps), le conteneur est
-  // lu à ~30 fps : c'est LUI qui sert à la navigation frame-par-frame,
-  // tandis que le FPS d'enregistrement (240) sert aux calculs.
-  const playbackFps = await detectPlaybackFps(el.videoElement);
-  el.videoElement.pause();
-  el.videoElement.currentTime = 0;
+  // Déterminer le FPS de lecture du conteneur, qui sert à la navigation
+  // frame-par-frame, et le nombre exact de frames.
+  // Priorité 1 : parsing binaire du fichier (table stts du MP4/MOV) — exact.
+  // Priorité 2 : mesure à la lecture (requestVideoFrameCallback) — approximative.
+  // Priorité 3 : le FPS d'enregistrement saisi — fallback.
+  const parsed = await parseMp4FileMetadata(file);
+  let playbackFps: number;
+  let frameCount: number;
+  let detectionSource: string;
 
-  if (playbackFps && playbackFps > 0) {
-    currentVideo.playbackFps = playbackFps;
+  if (parsed && parsed.frameCount > 1 && parsed.playbackFps > 0) {
+    playbackFps = parsed.playbackFps;
+    frameCount = parsed.frameCount;
+    detectionSource = 'métadonnées du fichier';
   } else {
-    // API indisponible : on suppose que lecture = enregistrement
-    currentVideo.playbackFps = currentVideo.fps;
+    const detected = await detectPlaybackFps(el.videoElement);
+    el.videoElement.pause();
+    el.videoElement.currentTime = 0;
+    if (detected && detected > 0) {
+      playbackFps = detected;
+      detectionSource = 'mesure à la lecture';
+    } else {
+      playbackFps = currentVideo.fps;
+      detectionSource = 'approximation — réglez le FPS de lecture si la navigation semble incorrecte';
+    }
+    frameCount = computeFrameCount(duration, playbackFps);
   }
-  currentVideo.frameCount = computeFrameCount(duration, currentVideo.playbackFps);
+
+  currentVideo.playbackFps = playbackFps;
+  currentVideo.frameCount = frameCount;
 
   initVideoPlayer(currentVideo);
   resetMarkers();
@@ -313,12 +329,13 @@ async function handleVideoUpload(file: File): Promise<void> {
   updateVideoInfo();
   updateFrameUI(0);
 
-  const slowdown = currentVideo.fps / currentVideo.playbackFps;
+  const slowdown = currentVideo.fps / playbackFps;
+  const realDuration = frameCount / currentVideo.fps;
   const ratioNote = slowdown > 1.05
-    ? ` Vidéo ralentie ×${slowdown.toFixed(1)} — FPS d'enregistrement : ${currentVideo.fps}.`
+    ? ` Ralenti ×${slowdown.toFixed(1)} — temps réel du saut ≈ ${realDuration.toFixed(1)} s.`
     : '';
   showAlert(
-    `Vidéo chargée : ${currentVideo.frameCount} frames (lecture ${Math.round(currentVideo.playbackFps)} fps).${ratioNote}`,
+    `Vidéo chargée : ${frameCount} frames, lecture ${Math.round(playbackFps)} fps (${detectionSource}).${ratioNote}`,
     'success'
   );
 }
@@ -379,11 +396,12 @@ function updateVideoInfo(): void {
   if (!currentVideo) return;
   const playback = currentVideo.playbackFps ?? currentVideo.fps;
   const slowdown = currentVideo.fps / playback;
+  const realDuration = currentVideo.frameCount / currentVideo.fps;
   el.videoInfo.textContent =
     `${currentVideo.width}×${currentVideo.height} · ${formatDuration(currentVideo.duration)} · ` +
     `${currentVideo.frameCount} frames · lecture ${Math.round(playback)} fps` +
     (slowdown > 1.05
-      ? ` · ralenti ×${slowdown.toFixed(1)} · enregistrement ${currentVideo.fps} fps`
+      ? ` · ralenti ×${slowdown.toFixed(1)} · enregistrement ${currentVideo.fps} fps · temps réel ≈ ${realDuration.toFixed(1)} s`
       : ` · ${currentVideo.fps} fps`);
 }
 
