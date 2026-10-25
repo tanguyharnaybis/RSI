@@ -80,12 +80,11 @@ export async function getFFmpegEngine(
     const coreJsUrl = new URL('ffmpeg-core.js', base).href;
     const coreWasmUrl = new URL('ffmpeg-core.wasm', base).href;
 
-    // Pré-télécharger avec progression : garantit la présence en cache
-    // (HTTP + service worker) avant le chargement par le worker.
-    const [coreJs, coreWasm] = await Promise.all([
-      downloadWithProgress(coreJsUrl),
-      downloadWithProgress(coreWasmUrl, onDownloadProgress),
-    ]);
+    // Vérification précoce + copie légère du core.js (112 Ko) pour le
+    // repli blob. Le WASM (32 Mo) n'est PAS pré-téléchargé : c'est le
+    // worker qui le récupère, pour ne jamais dédoubler 32 Mo en RAM
+    // (critique sur iPhone).
+    const coreJs = await downloadWithProgress(coreJsUrl, onDownloadProgress);
 
     const ffmpeg = new FFmpeg();
     // Listeners uniques attachés à la création de l'instance
@@ -96,37 +95,42 @@ export async function getFFmpegEngine(
       currentProgressHandler?.(progress);
     });
 
+    let directError: unknown = null;
+    let blobError: unknown = null;
+
+    // 1) URL HTTP directes (same-origin) : le mode le plus fiable —
+    // notamment sur iPhone / PWA installée, où WebKit restreint l'accès
+    // aux URLs blob: depuis un Worker.
     try {
-      // URL HTTP directes (same-origin) : le mode de chargement le plus
-      // fiable — notamment sur iPhone / PWA installée, où WebKit restreint
-      // l'accès aux URLs blob: depuis un Worker (erreur
-      // « failed to import ffmpeg-core.js »).
       await ffmpeg.load({ coreURL: coreJsUrl, wasmURL: coreWasmUrl });
-    } catch (directError) {
-      // Repli : blob URLs (contextes qui restreignent l'import http direct)
-      const coreBlobURL = URL.createObjectURL(
-        new Blob([coreJs as unknown as BlobPart], { type: "text/javascript" })
-      );
-      const wasmBlobURL = URL.createObjectURL(
-        new Blob([coreWasm as unknown as BlobPart], { type: "application/wasm" })
-      );
-      try {
-        await ffmpeg.load({ coreURL: coreBlobURL, wasmURL: wasmBlobURL });
-      } catch (blobError) {
-        console.error('[RSI Calc] Chargement ffmpeg (URL directe) :', directError);
-        console.error('[RSI Calc] Chargement ffmpeg (blob) :', blobError);
-        throw new Error(
-          'Impossible de charger le moteur ffmpeg sur ce navigateur. ' +
-          'Sur iPhone, utilisez Safari (l\'analyse nécessite aussi assez de mémoire libre).'
-        );
-      } finally {
-        URL.revokeObjectURL(coreBlobURL);
-        URL.revokeObjectURL(wasmBlobURL);
-      }
+      ffmpegInstance = ffmpeg;
+      return ffmpeg;
+    } catch (error) {
+      directError = error;
     }
 
-    ffmpegInstance = ffmpeg;
-    return ffmpeg;
+    // 2) Repli : core en blob (112 Ko), WASM en URL directe
+    const coreBlobURL = URL.createObjectURL(
+      new Blob([coreJs as unknown as BlobPart], { type: 'text/javascript' })
+    );
+    try {
+      await ffmpeg.load({ coreURL: coreBlobURL, wasmURL: coreWasmUrl });
+      ffmpegInstance = ffmpeg;
+      return ffmpeg;
+    } catch (error) {
+      blobError = error;
+    } finally {
+      URL.revokeObjectURL(coreBlobURL);
+    }
+
+    // Diagnostic complet remonté à l'interface
+    console.error('[RSI Calc] Chargement ffmpeg (URL directe) :', directError);
+    console.error('[RSI Calc] Chargement ffmpeg (blob) :', blobError);
+    throw new Error(
+      `Chargement du moteur ffmpeg impossible — ` +
+      `URL directe : ${directError instanceof Error ? directError.message : String(directError)} ; ` +
+      `blob : ${blobError instanceof Error ? blobError.message : String(blobError)}`
+    );
   })();
 
   try {

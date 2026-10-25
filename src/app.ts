@@ -710,15 +710,9 @@ async function runFfmpegAnalysis(): Promise<void> {
       videoPlayer?.setTimestampIndex(null);
     }
 
-    ffmpegSetStatus('Téléchargement du moteur ffmpeg…');
+    ffmpegSetStatus('Chargement du moteur ffmpeg (≈32 Mo, une seule fois)…');
     ffmpegSetProgress(null);
     const index = await analyzeVideoFrames(currentFile, {
-      onDownloadProgress: (ratio) => {
-        ffmpegSetStatus(
-          `Téléchargement du moteur ffmpeg… ${Math.round(ratio * 100)} % (une seule fois, puis en cache)`
-        );
-        ffmpegSetProgress(ratio);
-      },
       onDecodeProgress: (ratio) => {
         ffmpegSetStatus('Décodage de la vidéo et indexation des timestamps…');
         ffmpegSetProgress(ratio);

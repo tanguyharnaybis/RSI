@@ -6,7 +6,7 @@
  * sous-chemin (GitHub Pages).
  */
 
-const CACHE_NAME = 'rsi-calc-v3';
+const CACHE_NAME = 'rsi-calc-v4';
 const OFFLINE_URLS = ['./', './index.html', './manifest.json', './favicon.svg'];
 
 self.addEventListener('install', (event) => {
@@ -28,6 +28,12 @@ self.addEventListener('fetch', (event) => {
 
   // Ignorer les requêtes cross-origin (CDN, etc.)
   if (new URL(request.url).origin !== self.location.origin) return;
+
+  // Bypass pour le moteur ffmpeg (~32 Mo) : le clonage de la réponse
+  // pour le cache double la mémoire en streaming et peut faire échouer
+  // le chargement sur iPhone (WebKit). Le moteur est chargé en réseau
+  // direct ; l'application elle-même reste mise en cache hors ligne.
+  if (request.url.includes('/ffmpeg/')) return;
 
   // Navigations : réseau d'abord, fallback cache (mode hors ligne)
   if (request.mode === 'navigate') {
