@@ -77,17 +77,15 @@ export async function getFFmpegEngine(
 
   loadingPromise = (async () => {
     const base = coreBaseURL();
-    const [coreJs, coreWasm] = await Promise.all([
-      downloadWithProgress(new URL('ffmpeg-core.js', base).href),
-      downloadWithProgress(new URL('ffmpeg-core.wasm', base).href, onDownloadProgress),
-    ]);
+    const coreJsUrl = new URL('ffmpeg-core.js', base).href;
+    const coreWasmUrl = new URL('ffmpeg-core.wasm', base).href;
 
-    const coreURL = URL.createObjectURL(
-      new Blob([coreJs as unknown as BlobPart], { type: "text/javascript" })
-    );
-    const wasmURL = URL.createObjectURL(
-      new Blob([coreWasm as unknown as BlobPart], { type: "application/wasm" })
-    );
+    // Pré-télécharger avec progression : garantit la présence en cache
+    // (HTTP + service worker) avant le chargement par le worker.
+    const [coreJs, coreWasm] = await Promise.all([
+      downloadWithProgress(coreJsUrl),
+      downloadWithProgress(coreWasmUrl, onDownloadProgress),
+    ]);
 
     const ffmpeg = new FFmpeg();
     // Listeners uniques attachés à la création de l'instance
@@ -98,7 +96,35 @@ export async function getFFmpegEngine(
       currentProgressHandler?.(progress);
     });
 
-    await ffmpeg.load({ coreURL, wasmURL });
+    try {
+      // URL HTTP directes (same-origin) : le mode de chargement le plus
+      // fiable — notamment sur iPhone / PWA installée, où WebKit restreint
+      // l'accès aux URLs blob: depuis un Worker (erreur
+      // « failed to import ffmpeg-core.js »).
+      await ffmpeg.load({ coreURL: coreJsUrl, wasmURL: coreWasmUrl });
+    } catch (directError) {
+      // Repli : blob URLs (contextes qui restreignent l'import http direct)
+      const coreBlobURL = URL.createObjectURL(
+        new Blob([coreJs as unknown as BlobPart], { type: "text/javascript" })
+      );
+      const wasmBlobURL = URL.createObjectURL(
+        new Blob([coreWasm as unknown as BlobPart], { type: "application/wasm" })
+      );
+      try {
+        await ffmpeg.load({ coreURL: coreBlobURL, wasmURL: wasmBlobURL });
+      } catch (blobError) {
+        console.error('[RSI Calc] Chargement ffmpeg (URL directe) :', directError);
+        console.error('[RSI Calc] Chargement ffmpeg (blob) :', blobError);
+        throw new Error(
+          'Impossible de charger le moteur ffmpeg sur ce navigateur. ' +
+          'Sur iPhone, utilisez Safari (l\'analyse nécessite aussi assez de mémoire libre).'
+        );
+      } finally {
+        URL.revokeObjectURL(coreBlobURL);
+        URL.revokeObjectURL(wasmBlobURL);
+      }
+    }
+
     ffmpegInstance = ffmpeg;
     return ffmpeg;
   })();
