@@ -3,6 +3,15 @@
  */
 
 import { initApp } from './app';
+import pkg from '../package.json';
+
+// Afficher la version (vérifiable en bas de page et dans la console)
+const version = `v${pkg.version}`;
+{
+  const badge = document.getElementById('app-version');
+  if (badge) badge.textContent = version;
+  console.info(`[RSI Calc] ${version}`);
+}
 
 // Injecter le manifest dynamiquement : le fichier est servi à la racine
 // (public/manifest.json), indépendamment de la base de déploiement.
