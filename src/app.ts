@@ -157,9 +157,9 @@ function bindEvents(): void {
     if (file) void handleVideoUpload(file);
   });
 
-  // Contrôles vidéo
-  el.btnPrevFrame.addEventListener('click', () => videoPlayer?.previousFrame());
-  el.btnNextFrame.addEventListener('click', () => videoPlayer?.nextFrame());
+  // Contrôles vidéo (navigation sur frames uniques)
+  el.btnPrevFrame.addEventListener('click', () => void goToPreviousUniqueFrame());
+  el.btnNextFrame.addEventListener('click', () => void goToNextUniqueFrame());
   el.btnPlayPause.addEventListener('click', togglePlayPause);
   el.btnZoom.addEventListener('click', () => {
     el.videoWrapper.classList.toggle('zoomed');
@@ -215,8 +215,8 @@ function bindEvents(): void {
     // Ignorer si l'utilisateur tape dans un champ
     const target = e.target as HTMLElement;
     if (target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.tagName === 'TEXTAREA') return;
-    if (e.key === 'ArrowLeft') videoPlayer?.previousFrame();
-    if (e.key === 'ArrowRight') videoPlayer?.nextFrame();
+    if (e.key === 'ArrowLeft') void goToPreviousUniqueFrame();
+    if (e.key === 'ArrowRight') void goToNextUniqueFrame();
     if (e.key === ' ') {
       e.preventDefault();
       togglePlayPause();
@@ -395,13 +395,17 @@ function applyFps(fps: number): void {
 function updateVideoInfo(): void {
   if (!currentVideo) return;
   const playback = currentVideo.playbackFps ?? currentVideo.fps;
-  const slowdown = currentVideo.fps / playback;
-  const realDuration = currentVideo.frameCount / currentVideo.fps;
+  const duplication = getDuplicationFactor();
+  // Ralenti visuel = fps d'enregistrement / (fps de lecture × duplication)
+  const slowdown = (currentVideo.fps * duplication) / playback;
+  // Durée réelle de la scène = frames / (fps d'enregistrement × duplication)
+  const realDuration = currentVideo.frameCount / (currentVideo.fps * duplication);
   el.videoInfo.textContent =
     `${currentVideo.width}×${currentVideo.height} · ${formatDuration(currentVideo.duration)} · ` +
     `${currentVideo.frameCount} frames · lecture ${Math.round(playback)} fps` +
+    (duplication > 1 ? ` · frames dupliquées ×${duplication}` : '') +
     (slowdown > 1.05
-      ? ` · ralenti ×${slowdown.toFixed(1)} · enregistrement ${currentVideo.fps} fps · temps réel ≈ ${realDuration.toFixed(1)} s`
+      ? ` · ralenti ×${slowdown.toFixed(1)} · temps réel ≈ ${realDuration.toFixed(1)} s`
       : ` · ${currentVideo.fps} fps`);
 }
 
@@ -483,6 +487,59 @@ function updateMarkerChips(): void {
 }
 
 // ============================================
+// Navigation frame-par-frame (saute les frames dupliquées)
+// ============================================
+
+/** Facteur de duplication confirmé (1 = aucune duplication) */
+function getDuplicationFactor(): number {
+  return videoPlayer?.getConfirmedDuplicationFactor() ?? 1;
+}
+
+/** Navigation en cours (évite les clics simultanés) */
+let navigating = false;
+let duplicationToastShown = false;
+
+async function goToNextUniqueFrame(): Promise<void> {
+  if (!videoPlayer || navigating) return;
+  navigating = true;
+  el.btnNextFrame.disabled = true;
+  try {
+    await videoPlayer.nextUniqueFrame();
+    notifyDuplicationDetected();
+  } finally {
+    navigating = false;
+    el.btnNextFrame.disabled = false;
+  }
+}
+
+async function goToPreviousUniqueFrame(): Promise<void> {
+  if (!videoPlayer || navigating) return;
+  navigating = true;
+  el.btnPrevFrame.disabled = true;
+  try {
+    await videoPlayer.previousUniqueFrame();
+    notifyDuplicationDetected();
+  } finally {
+    navigating = false;
+    el.btnPrevFrame.disabled = false;
+  }
+}
+
+/** Prévient l'utilisateur qu'un facteur de duplication a été détecté */
+function notifyDuplicationDetected(): void {
+  const factor = getDuplicationFactor();
+  updateVideoInfo();
+  if (factor > 1 && !duplicationToastShown) {
+    duplicationToastShown = true;
+    showAlert(
+      `Frames dupliquées détectées (×${factor}) : chaque clic avance d'une vraie frame. ` +
+      'Les calculs sont ajustés automatiquement.',
+      'info'
+    );
+  }
+}
+
+// ============================================
 // Calcul RSI
 // ============================================
 
@@ -498,11 +555,15 @@ function calculateRSIFromMarkers(): void {
   const finalLanding = markers.finalLanding!;
 
   try {
+    // FPS effectif = cadence d'enregistrement × facteur de duplication :
+    // dans une vidéo où chaque image est dupliquée ×N, N samples
+    // représentent une seule frame réelle (1/fps s).
+    const effectiveFps = currentVideo.fps * getDuplicationFactor();
     const result = calculateRSI(
       landing.frameNumber,
       takeoff.frameNumber,
       finalLanding.frameNumber,
-      currentVideo.fps,
+      effectiveFps,
       gravity
     );
     const formatted = formatRSIResult(result);
@@ -587,10 +648,13 @@ async function saveCurrentTrial(): Promise<void> {
     return;
   }
 
+  // Stocker le FPS effectif dans l'essai (enregistrement × duplication) :
+  // les recalculs et exports resteront justes avec les samples marqués.
+  const effectiveMetadata = { ...currentVideo, fps: currentVideo.fps * getDuplicationFactor() };
   const trial: Trial = createTrialFromMarkers(
     currentSession.id,
     markerManager.getAllMarkers(),
-    currentVideo,
+    effectiveMetadata,
     gravity
   );
 

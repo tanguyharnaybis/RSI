@@ -4,6 +4,11 @@
  */
 
 import type { VideoMetadata, VideoPlayer } from '../types';
+import { diffRatio, FRAME_DIFF_THRESHOLD, computeDuplicationHint, computeConfirmedDuplicationFactor } from './frameDiff';
+
+// Taille de l'empreinte visuelle d'une frame (réduite pour la rapidité)
+const FP_W = 48;
+const FP_H = 27;
 
 export class FrameByFramePlayer implements VideoPlayer {
   private video: HTMLVideoElement;
@@ -14,6 +19,14 @@ export class FrameByFramePlayer implements VideoPlayer {
   private eventListeners: Map<string, Set<Function>> = new Map();
   private currentFrame: number = 0;
   private isInitialized: boolean = false;
+
+  // Détection des frames dupliquées
+  private fpCanvas: HTMLCanvasElement | null = null;
+  private fpCtx: CanvasRenderingContext2D | null = null;
+  private duplicationDistances: number[] = [];
+  private duplicationHint = 1;
+  private navigationBusy = false;
+  private lastConfirmedSample = -1;
 
   /**
    * FPS utilisé pour la navigation frame-par-frame.
@@ -57,6 +70,11 @@ export class FrameByFramePlayer implements VideoPlayer {
     });
 
     this.video.addEventListener('seeked', () => {
+      // Mémoriser le sample confirmé (frame affichée à jour).
+      // Les seeks visent le CENTRE du sample (voir goToFrame), d'où le −0,5.
+      this.lastConfirmedSample = Math.round(
+        this.video.currentTime * this.navFps - 0.5
+      );
       const frame = this.getCurrentFrame();
       this.emit('video:frame:changed', frame);
     });
@@ -139,16 +157,20 @@ export class FrameByFramePlayer implements VideoPlayer {
   }
 
   /**
-   * Va à un frame spécifique
+   * Va à un frame spécifique.
+   * Le seek vise le CENTRE de la frame ((frame + 0,5) / fps) : viser la
+   * frontière exacte (frame / fps) provoque des erreurs d'arrondi où le
+   * navigateur affiche la frame précédente — donnant l'impression que
+   * des frames sont dupliquées.
    * @param frame - Numéro du frame
    */
   goToFrame(frame: number): void {
     const clampedFrame = Math.max(0, Math.min(frame, this.metadata.frameCount - 1));
     this.currentFrame = clampedFrame;
-    
-    const time = this.getTimeAtFrame(clampedFrame);
+
+    const time = (clampedFrame + 0.5) / this.navFps;
     this.video.currentTime = time;
-    
+
     this.emit('video:frame:changed', clampedFrame);
   }
 
@@ -386,6 +408,197 @@ export class FrameByFramePlayer implements VideoPlayer {
    */
   getMetadata(): VideoMetadata {
     return this.metadata;
+  }
+
+  // ============================================
+  // Navigation sur frames uniques (anti-duplication)
+  // ============================================
+
+  /**
+   * Facteur de duplication estimé : nombre de samples consécutifs
+   * partageant la même image (1 = aucune duplication).
+   */
+  getDuplicationHint(): number {
+    return this.duplicationHint;
+  }
+
+  /**
+   * Facteur de duplication CONFIRMÉ (majorité claire des observations).
+   * C'est celui utilisé pour les calculs de temps : un facteur > 1
+   * n'est retenu que si la duplication est systématique.
+   */
+  getConfirmedDuplicationFactor(): number {
+    return computeConfirmedDuplicationFactor(this.duplicationDistances);
+  }
+
+  /**
+   * Empreinte visuelle de la frame affichée (niveaux de gris réduits)
+   */
+  private grabFingerprint(): Uint8Array | null {
+    if (this.video.readyState < 2 || !this.video.videoWidth) return null;
+    if (!this.fpCanvas) {
+      this.fpCanvas = document.createElement('canvas');
+      this.fpCanvas.width = FP_W;
+      this.fpCanvas.height = FP_H;
+      this.fpCtx = this.fpCanvas.getContext('2d');
+    }
+    if (!this.fpCtx) return null;
+    this.fpCtx.drawImage(this.video, 0, 0, FP_W, FP_H);
+    const data = this.fpCtx.getImageData(0, 0, FP_W, FP_H).data;
+    const gray = new Uint8Array(FP_W * FP_H);
+    for (let i = 0; i < gray.length; i++) {
+      gray[i] = (data[i * 4] + data[i * 4 + 1] + data[i * 4 + 2]) / 3 | 0;
+    }
+    return gray;
+  }
+
+  /**
+   * Positionne la vidéo sur un sample et attend que la frame soit
+   * réellement affichée (via requestVideoFrameCallback si disponible).
+   */
+  private async seekAndWait(sample: number): Promise<void> {
+    if (sample === this.lastConfirmedSample) return;
+    // Viser le centre du sample (évite les erreurs d'arrondi de frontière)
+    const time = (sample + 0.5) / this.navFps;
+    const video = this.video;
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const done = () => {
+        if (settled) return;
+        settled = true;
+        this.lastConfirmedSample = sample;
+        resolve();
+      };
+      const timeoutId = window.setTimeout(done, 2500);
+
+      if (typeof video.requestVideoFrameCallback === 'function') {
+        const check = (_now: number, meta: { mediaTime: number }) => {
+          if (settled) return;
+          // La frame présentée correspond-elle au sample visé ?
+          if (Math.round(meta.mediaTime * this.navFps) === sample) {
+            window.clearTimeout(timeoutId);
+            done();
+          } else {
+            video.requestVideoFrameCallback(check);
+          }
+        };
+        video.requestVideoFrameCallback(check);
+      } else {
+        video.addEventListener('seeked', () => {
+          window.clearTimeout(timeoutId);
+          done();
+        }, { once: true });
+      }
+      video.currentTime = time;
+    });
+  }
+
+  /**
+   * Enregistre la distance observée entre deux frames uniques et met
+   * à jour le facteur de duplication estimé.
+   */
+  private recordDistance(distance: number): void {
+    if (distance < 1) return;
+    this.duplicationDistances.push(distance);
+    if (this.duplicationDistances.length > 50) {
+      this.duplicationDistances.shift();
+    }
+    this.duplicationHint = computeDuplicationHint(this.duplicationDistances);
+  }
+
+  /**
+   * Frame suivante visuellement différente (saute les samples dupliqués).
+   * Recherche exponentielle puis dichotomie pour rester rapide même avec
+   * un facteur de duplication élevé.
+   * @returns Le sample atteint
+   */
+  async nextUniqueFrame(): Promise<number> {
+    if (this.navigationBusy) return this.currentFrame;
+    this.navigationBusy = true;
+    try {
+      if (!this.video.paused) this.video.pause();
+
+      const total = this.metadata.frameCount;
+      const start = this.currentFrame;
+      await this.seekAndWait(start);
+      const startFp = this.grabFingerprint();
+      if (!startFp) return start;
+
+      // Recherche exponentielle du premier sample différent
+      let lastSame = start;
+      let step = Math.max(1, this.duplicationHint);
+      while (true) {
+        const candidate = Math.min(start + step, total - 1);
+        if (candidate <= lastSame) break; // fin de vidéo sans changement
+        await this.seekAndWait(candidate);
+        const fp = this.grabFingerprint();
+        if (fp && diffRatio(startFp, fp) > FRAME_DIFF_THRESHOLD) {
+          // Premier changement ∈ (lastSame, candidate] : dichotomie
+          let first = candidate;
+          while (first - lastSame > 1) {
+            const mid = Math.floor((lastSame + first) / 2);
+            await this.seekAndWait(mid);
+            const midFp = this.grabFingerprint();
+            if (midFp && diffRatio(startFp, midFp) > FRAME_DIFF_THRESHOLD) {
+              first = mid;
+            } else {
+              lastSame = mid;
+            }
+          }
+          this.recordDistance(first - start);
+          this.goToFrame(first);
+          return first;
+        }
+        lastSame = candidate;
+        step *= 2;
+        if (step > 4096) break;
+      }
+
+      // Aucun changement trouvé : aller à la dernière frame
+      this.goToFrame(total - 1);
+      return total - 1;
+    } finally {
+      this.navigationBusy = false;
+    }
+  }
+
+  /**
+   * Frame précédente visuellement différente (saute les samples dupliqués).
+   * @returns Le sample atteint
+   */
+  async previousUniqueFrame(): Promise<number> {
+    if (this.navigationBusy) return this.currentFrame;
+    this.navigationBusy = true;
+    try {
+      if (!this.video.paused) this.video.pause();
+
+      const start = this.currentFrame;
+      if (start <= 0) return 0;
+      await this.seekAndWait(start);
+      const startFp = this.grabFingerprint();
+      if (!startFp) return start;
+
+      // Reculer par bonds croissants jusqu'à trouver une image différente
+      let step = Math.max(1, this.duplicationHint);
+      let candidate = Math.max(start - step, 0);
+      while (true) {
+        await this.seekAndWait(candidate);
+        const fp = this.grabFingerprint();
+        if (fp && diffRatio(startFp, fp) > FRAME_DIFF_THRESHOLD) {
+          this.recordDistance(start - candidate);
+          this.goToFrame(candidate);
+          return candidate;
+        }
+        if (candidate === 0) break;
+        step = Math.min(step * 2, 2048);
+        candidate = Math.max(candidate - step, 0);
+      }
+
+      this.goToFrame(0);
+      return 0;
+    } finally {
+      this.navigationBusy = false;
+    }
   }
 
   /**
