@@ -445,15 +445,25 @@
       <h2>2. Paramètres</h2>
       <div class="form-row">
         <div class="form-group">
-          <label for="fps-input">FPS d'enregistrement de la vidéo</label>
+          <label for="fps-input">FPS d'enregistrement (prise de vue)</label>
           <input type="number" id="fps-input" min="1" max="1000" step="1" value="240" inputmode="numeric">
         </div>
+        <div class="form-group">
+          <label for="playback-fps-input">FPS de lecture (navigation)</label>
+          <input type="number" id="playback-fps-input" min="1" max="1000" step="1" placeholder="auto" inputmode="numeric">
+        </div>
+      </div>
+      <div class="form-row">
         <div class="form-group">
           <label for="gravity-input">Gravité (m/s²)</label>
           <input type="number" id="gravity-input" min="1" max="20" step="0.01" value="9.81" inputmode="decimal">
         </div>
       </div>
-      <p class="hint">Entrez la cadence <strong>réelle de tournage</strong> (ex. 240 pour un slow-mo), pas la vitesse de lecture : une vidéo slow-mo importée est ralentie à ~30 fps de lecture, mais chaque frame représente bien 1/240ᵉ de seconde réelle. Le FPS de lecture (détection automatique) sert uniquement à la navigation frame-par-frame.</p>
+      <p class="hint">
+        Le <strong>FPS d'enregistrement</strong> (ex. 240 pour un slow-mo) sert aux calculs de temps.
+        Le <strong>FPS de lecture</strong> est celui du fichier vidéo (détection automatique) : il sert uniquement à la navigation frame par frame.
+        Saisissez-le manuellement uniquement si la détection échoue (ex. 30 pour un export slow-mo étiré).
+      </p>
     </section>
 
     <!-- 3. Marquage -->

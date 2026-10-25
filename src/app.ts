@@ -62,6 +62,7 @@ const el = {
   get timelineFill() { return $('timeline-fill'); },
   get timelineThumb() { return $('timeline-thumb'); },
   get fpsInput() { return $<HTMLInputElement>('fps-input'); },
+  get playbackFpsInput() { return $<HTMLInputElement>('playback-fps-input'); },
   get gravityInput() { return $<HTMLInputElement>('gravity-input'); },
   get btnMarkLanding() { return $<HTMLButtonElement>('btn-mark-landing'); },
   get btnMarkTakeoff() { return $<HTMLButtonElement>('btn-mark-takeoff'); },
@@ -171,6 +172,7 @@ function bindEvents(): void {
 
   // Paramètres
   el.fpsInput.addEventListener('change', () => applyFps(parseFloat(el.fpsInput.value)));
+  el.playbackFpsInput.addEventListener('change', () => void applyManualPlaybackFps());
   el.gravityInput.addEventListener('change', () => {
     const g = parseFloat(el.gravityInput.value);
     gravity = clamp(Number.isFinite(g) && g > 0 ? g : 9.81, 1, 20);
@@ -290,54 +292,131 @@ async function handleVideoUpload(file: File): Promise<void> {
     fps,
   };
 
-  // Déterminer le FPS de lecture du conteneur, qui sert à la navigation
-  // frame-par-frame, et le nombre exact de frames.
-  // Priorité 1 : parsing binaire du fichier (table stts du MP4/MOV) — exact.
-  // Priorité 2 : mesure à la lecture (requestVideoFrameCallback) — approximative.
-  // Priorité 3 : le FPS d'enregistrement saisi — fallback.
+  // Afficher la vidéo AVANT la mesure à la lecture : le navigateur ne
+  // présente pas les frames d'un élément invisible.
+  el.videoSection.style.display = 'block';
+
+  // Déterminer le FPS de lecture du conteneur (navigation frame par frame).
+  // Priorité 1 : parsing binaire du fichier (table des frames) — exact.
+  // Priorité 2 : mesure à la lecture (frames présentées).
+  // Priorité 3 : FPS de lecture saisi manuellement (champ Paramètres).
+  // JAMAIS le FPS d'enregistrement : il ne décrit pas le conteneur.
   const parsed = await parseMp4FileMetadata(file);
-  let playbackFps: number;
-  let frameCount: number;
-  let detectionSource: string;
+  let playbackFps: number | null = null;
+  let frameCount = 0;
+  let source = '';
 
   if (parsed && parsed.frameCount > 1 && parsed.playbackFps > 0) {
     playbackFps = parsed.playbackFps;
     frameCount = parsed.frameCount;
-    detectionSource = 'métadonnées du fichier';
+    source = parsed.fragmented ? 'métadonnées du fichier (fragmenté)' : 'métadonnées du fichier';
   } else {
     const detected = await detectPlaybackFps(el.videoElement);
     el.videoElement.pause();
     el.videoElement.currentTime = 0;
     if (detected && detected > 0) {
       playbackFps = detected;
-      detectionSource = 'mesure à la lecture';
+      frameCount = computeFrameCount(duration, detected);
+      source = 'mesure à la lecture';
     } else {
-      playbackFps = currentVideo.fps;
-      detectionSource = 'approximation — réglez le FPS de lecture si la navigation semble incorrecte';
+      const manual = parseFloat(el.playbackFpsInput.value);
+      if (Number.isFinite(manual) && manual > 0) {
+        playbackFps = clamp(manual, 1, 1000);
+        frameCount = computeFrameCount(duration, playbackFps);
+        source = 'saisie manuelle';
+      }
     }
-    frameCount = computeFrameCount(duration, playbackFps);
   }
 
-  currentVideo.playbackFps = playbackFps;
+  if (playbackFps) {
+    el.playbackFpsInput.value = String(Math.round(playbackFps * 100) / 100);
+  }
+  currentVideo.playbackFps = playbackFps ?? undefined;
   currentVideo.frameCount = frameCount;
+
+  el.fpsInput.value = String(currentVideo.fps);
+
+  if (!playbackFps) {
+    // Détection impossible : navigation désactivée jusqu'à saisie manuelle.
+    setNavigationEnabled(false);
+    el.videoInfo.textContent =
+      'FPS de lecture non déterminé — saisissez-le dans les Paramètres (ex. 30) pour activer la navigation.';
+    showAlert(
+      'Impossible de déterminer le FPS de lecture automatiquement. ' +
+      'Saisissez le FPS de lecture dans les Paramètres (ex. 30 pour un export slow-mo étiré) puis validez.',
+      'error'
+    );
+    return;
+  }
 
   initVideoPlayer(currentVideo);
   resetMarkers();
-
-  el.videoSection.style.display = 'block';
-  el.fpsInput.value = String(currentVideo.fps);
+  setNavigationEnabled(true);
   updateVideoInfo();
   updateFrameUI(0);
 
   const slowdown = currentVideo.fps / playbackFps;
-  const realDuration = frameCount / currentVideo.fps;
   const ratioNote = slowdown > 1.05
-    ? ` Ralenti ×${slowdown.toFixed(1)} — temps réel du saut ≈ ${realDuration.toFixed(1)} s.`
+    ? ` Ralenti ×${slowdown.toFixed(1)} — temps réel du saut ≈ ${(frameCount / currentVideo.fps).toFixed(1)} s.`
     : '';
   showAlert(
-    `Vidéo chargée : ${frameCount} frames, lecture ${Math.round(playbackFps)} fps (${detectionSource}).${ratioNote}`,
+    `Vidéo chargée : ${frameCount} frames, lecture ${Math.round(playbackFps)} fps (${source}).${ratioNote}`,
     'success'
   );
+}
+
+/**
+ * Active/désactive la navigation frame par frame (quand le FPS de lecture
+ * n'est pas déterminé, la navigation est impossible — pas de faux repli).
+ */
+function setNavigationEnabled(enabled: boolean): void {
+  el.btnPrevFrame.disabled = !enabled;
+  el.btnNextFrame.disabled = !enabled;
+  if (!enabled) {
+    el.frameCounter.textContent = 'Frame — / —';
+  }
+}
+
+/**
+ * Applique le FPS de lecture saisi manuellement (champ Paramètres) :
+ * recalcule le compteur de frames et active la navigation.
+ */
+function applyManualPlaybackFps(): Promise<void> {
+  if (!currentVideo || !Number.isFinite(currentVideo.duration)) return Promise.resolve();
+
+  const manual = parseFloat(el.playbackFpsInput.value);
+  if (!Number.isFinite(manual) || manual <= 0) {
+    // Champ vidé : si le player existe, garder la valeur précédente
+    if (currentVideo.playbackFps && videoPlayer) {
+      el.playbackFpsInput.value = String(currentVideo.playbackFps);
+    }
+    return Promise.resolve();
+  }
+
+  const playbackFps = clamp(manual, 1, 1000);
+  el.playbackFpsInput.value = String(playbackFps);
+  currentVideo.playbackFps = playbackFps;
+  currentVideo.frameCount = computeFrameCount(currentVideo.duration, playbackFps);
+
+  if (videoPlayer) {
+    videoPlayer.setMetadata({
+      playbackFps,
+      frameCount: currentVideo.frameCount,
+    });
+  } else {
+    // Détection avait échoué : créer le player maintenant
+    initVideoPlayer(currentVideo);
+    setNavigationEnabled(true);
+  }
+
+  markerManager.initialize(currentVideo.frameCount);
+  updateVideoInfo();
+  updateFrameUI(videoPlayer?.getCurrentFrame() ?? 0);
+  showAlert(
+    `FPS de lecture : ${Math.round(playbackFps)} — ${currentVideo.frameCount} frames.`,
+    'info'
+  );
+  return Promise.resolve();
 }
 
 function initVideoPlayer(metadata: VideoMetadata): void {
@@ -380,21 +459,29 @@ function applyFps(fps: number): void {
   if (!currentVideo) return;
 
   currentVideo.fps = valid;
-  // Le compteur de frames reste basé sur le FPS de lecture (navigation)
-  const playback = currentVideo.playbackFps ?? currentVideo.fps;
-  currentVideo.frameCount = computeFrameCount(currentVideo.duration, playback);
-  markerManager.initialize(currentVideo.frameCount);
-  if (videoPlayer) {
-    videoPlayer.setMetadata({ fps: valid, frameCount: currentVideo.frameCount });
+  // Le compteur de frames reste basé sur le FPS de lecture (jamais le FPS
+  // d'enregistrement : il ne décrit pas la structure du conteneur)
+  const playback = currentVideo.playbackFps;
+  if (playback) {
+    currentVideo.frameCount = computeFrameCount(currentVideo.duration, playback);
+    if (videoPlayer) {
+      videoPlayer.setMetadata({ fps: valid, frameCount: currentVideo.frameCount });
+    }
+    markerManager.initialize(currentVideo.frameCount);
+    updateVideoInfo();
+    updateFrameUI(videoPlayer?.getCurrentFrame() ?? 0);
   }
-  updateVideoInfo();
-  updateFrameUI(videoPlayer?.getCurrentFrame() ?? 0);
   showAlert(`FPS d'enregistrement mis à jour : ${valid}`, 'info');
 }
 
 function updateVideoInfo(): void {
   if (!currentVideo) return;
-  const playback = currentVideo.playbackFps ?? currentVideo.fps;
+  const playback = currentVideo.playbackFps;
+  if (!playback) {
+    el.videoInfo.textContent =
+      'FPS de lecture non déterminé — saisissez-le dans les Paramètres (ex. 30).';
+    return;
+  }
   const duplication = getDuplicationFactor();
   // Ralenti visuel = fps d'enregistrement / (fps de lecture × duplication)
   const slowdown = (currentVideo.fps * duplication) / playback;
@@ -411,6 +498,10 @@ function updateVideoInfo(): void {
 
 function updateFrameUI(frame: number): void {
   if (!currentVideo) return;
+  if (!currentVideo.playbackFps || currentVideo.frameCount < 1) {
+    el.frameCounter.textContent = 'Frame — / —';
+    return;
+  }
   el.frameCounter.textContent = `Frame ${frame + 1} / ${currentVideo.frameCount}`;
   const ratio = currentVideo.frameCount > 1 ? frame / (currentVideo.frameCount - 1) : 0;
   const pct = `${(ratio * 100).toFixed(2)}%`;
