@@ -7,7 +7,6 @@
   <meta name="theme-color" content="#1a1a2e">
   <title>RSI Calc - Calculateur Reactive Strength Index</title>
 
-  <link rel="manifest" href="./manifest.json">
   <link rel="icon" type="image/svg+xml" href="./favicon.svg">
 
   <style>
@@ -535,6 +534,16 @@
         <li><span class="check">✓</span><span>Marquer précisément : atterrissage → décollage → atterrissage final</span></li>
       </ul>
       <p class="hint" style="margin-top:10px">
+        Filmer le ralenti : le mode « Prendre une vidéo » du navigateur ne propose pas le slow-motion.
+        Filmez avec l'application <strong>Appareil photo</strong> en mode <strong>Ralenti</strong> (240 fps),
+        puis importez la vidéo depuis la <strong>photothèque</strong>.
+      </p>
+      <p class="hint">
+        Important : le paramètre FPS doit être la <strong>cadence d'enregistrement réelle</strong>
+        (ex. 240 pour un slow-mo), et non la vitesse de lecture de la vidéo importée —
+        une vidéo slow-mo importée dure souvent plusieurs fois la durée réelle du saut.
+      </p>
+      <p class="hint">
         Temps de contact <span class="formula">(f2 − f1) / fps</span> ·
         Temps de vol <span class="formula">(f3 − f2) / fps</span> ·
         Hauteur <span class="formula">g·t_vol² / 8</span> ·

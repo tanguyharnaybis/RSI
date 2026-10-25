@@ -72,6 +72,9 @@ export async function extractVideoMetadata(file: File): Promise<VideoMetadata> {
  * @returns Nombre de frames
  */
 export function computeFrameCount(duration: number, fps: number): number {
+  if (!Number.isFinite(duration) || !Number.isFinite(fps) || duration <= 0 || fps <= 0) {
+    return 1;
+  }
   return Math.max(1, Math.round(duration * fps));
 }
 

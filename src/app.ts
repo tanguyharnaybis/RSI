@@ -232,44 +232,76 @@ function bindEvents(): void {
 
 async function handleVideoUpload(file: File): Promise<void> {
   if (!validateVideoFile(file)) {
-    showAlert('Format vidéo non supporté (MP4, WebM, MOV) ou fichier trop volumineux.', 'error');
+    showAlert(
+      `Format non supporté (${file.type || 'type inconnu'}, ${(file.size / 1024 / 1024).toFixed(1)} Mo). ` +
+      'Utilisez MP4, WebM ou MOV (max 500 Mo).',
+      'error'
+    );
     return;
   }
 
+  let metadata;
   try {
-    const metadata = await extractVideoMetadata(file);
-    const url = URL.createObjectURL(file);
-
-    el.videoElement.src = url;
-    el.videoElement.loop = true;
-    await new Promise<void>((resolve, reject) => {
-      el.videoElement.onloadeddata = () => resolve();
-      el.videoElement.onerror = () => reject(new Error('Impossible de lire la vidéo'));
-    });
-
-    // Mettre à jour les métadonnées avec les valeurs réelles
-    currentVideo = {
-      ...metadata,
-      duration: el.videoElement.duration,
-      width: el.videoElement.videoWidth,
-      height: el.videoElement.videoHeight,
-      fps: parseFloat(el.fpsInput.value) || metadata.fps,
-    };
-    currentVideo.frameCount = computeFrameCount(currentVideo.duration, currentVideo.fps);
-
-    initVideoPlayer(currentVideo);
-    resetMarkers();
-
-    el.videoSection.style.display = 'block';
-    el.fpsInput.value = String(currentVideo.fps);
-    updateVideoInfo();
-    updateFrameUI(0);
-
-    showAlert(`Vidéo chargée : ${currentVideo.frameCount} frames à ${currentVideo.fps} fps.`, 'success');
-  } catch (error) {
-    console.error(error);
-    showAlert('Erreur lors du chargement de la vidéo.', 'error');
+    metadata = await extractVideoMetadata(file);
+  } catch {
+    showAlert('Impossible de lire les métadonnées de cette vidéo.', 'error');
+    return;
   }
+
+  const url = URL.createObjectURL(file);
+  el.videoElement.preload = 'metadata';
+  el.videoElement.src = url;
+  el.videoElement.loop = true;
+
+  // Attendre les métadonnées, avec timeout : certains formats (ex. HEVC/H.265
+  // filmés sur iPhone) ne sont pas décodables par tous les navigateurs.
+  const loaded = await new Promise<boolean>((resolve) => {
+    const timeout = window.setTimeout(() => resolve(false), 15000);
+    el.videoElement.onloadedmetadata = () => {
+      window.clearTimeout(timeout);
+      resolve(true);
+    };
+    el.videoElement.onerror = () => {
+      window.clearTimeout(timeout);
+      resolve(false);
+    };
+  });
+
+  const duration = el.videoElement.duration;
+  if (!loaded || !Number.isFinite(duration)) {
+    el.videoElement.removeAttribute('src');
+    URL.revokeObjectURL(url);
+    showAlert(
+      'Cette vidéo ne peut pas être lue par votre navigateur. ' +
+      'Cause fréquente : format HEVC/H.265 (vidéos iPhone récentes) non supporté, ou fichier corrompu. ' +
+      'Essayez une autre vidéo ou un autre navigateur.',
+      'error'
+    );
+    return;
+  }
+
+  const fps = clamp(parseFloat(el.fpsInput.value) || metadata.fps, 1, 1000);
+  currentVideo = {
+    ...metadata,
+    duration,
+    width: el.videoElement.videoWidth,
+    height: el.videoElement.videoHeight,
+    fps,
+  };
+  currentVideo.frameCount = computeFrameCount(duration, currentVideo.fps);
+
+  initVideoPlayer(currentVideo);
+  resetMarkers();
+
+  el.videoSection.style.display = 'block';
+  el.fpsInput.value = String(currentVideo.fps);
+  updateVideoInfo();
+  updateFrameUI(0);
+
+  const ratioNote = currentVideo.isSlowMotion
+    ? ''
+    : ' Astuce : entrez le FPS réel d\'enregistrement (ex. 240) dans les paramètres.';
+  showAlert(`Vidéo chargée : ${currentVideo.frameCount} frames à ${currentVideo.fps} fps.${ratioNote}`, 'success');
 }
 
 function initVideoPlayer(metadata: VideoMetadata): void {

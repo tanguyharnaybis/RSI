@@ -4,6 +4,17 @@
 
 import { initApp } from './app';
 
+// Injecter le manifest dynamiquement : le fichier est servi à la racine
+// (public/manifest.json), indépendamment de la base de déploiement.
+// (Vite déplacerait sinon le manifest dans assets/, ce qui casserait
+// le start_url "./" de la PWA installée.)
+{
+  const link = document.createElement('link');
+  link.rel = 'manifest';
+  link.href = new URL('manifest.json', document.baseURI).href;
+  document.head.appendChild(link);
+}
+
 async function bootstrap(): Promise<void> {
   try {
     await initApp();
