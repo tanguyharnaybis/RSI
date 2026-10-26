@@ -263,12 +263,28 @@ export async function analyzeVideoFrames(
   await ffmpeg.writeFile(inputName, data);
 
   const entries: { frameNumber: number; pts: number; ptsTime: number }[] = [];
+  // Blocs du filtre metadata : (pts_time, lavfi.scene) par frame
+  const sceneBlocks: { ptsTime: number; scene: number }[] = [];
+  let lastMetadataPtsTime = 0;
   let decodeError: string | null = null;
 
   currentLogHandler = (message) => {
     const parsed = parseShowinfoLine(message);
     if (parsed) {
       entries.push(parsed);
+      return;
+    }
+    // Filtre metadata=print : bloc frame/pts/pts_time puis clés lavfi.*
+    if (message.includes('Parsed_metadata')) {
+      const blockMatch = /frame:\s*\d+\s+pts:\s*-?\d+\s+pts_time:\s*(-?[\d.eE+-]+)/.exec(message);
+      if (blockMatch) {
+        lastMetadataPtsTime = parseFloat(blockMatch[1]);
+        return;
+      }
+      const sceneMatch = /lavfi\.scene=([\d.eE+-]+)/.exec(message);
+      if (sceneMatch && Number.isFinite(lastMetadataPtsTime)) {
+        sceneBlocks.push({ ptsTime: lastMetadataPtsTime, scene: parseFloat(sceneMatch[1]) });
+      }
       return;
     }
     if (
@@ -284,17 +300,36 @@ export async function analyzeVideoFrames(
   };
 
   let exitCode = -1;
-  try {
-    exitCode = await ffmpeg.exec([
+  // Le score de mouvement (lavfi.scene du filtre select) alimente la
+  // détection automatique des sauts ; en cas d'échec du filtre étendu,
+  // repli sur l'analyse simple (index sans scores).
+  const FILTER_WITH_SCENE =
+    'showinfo,select=gte(scene\\,0),metadata=print';
+  const FILTER_BASIC = 'showinfo';
+
+  const runAnalysis = async (filter: string): Promise<number> => {
+    // Réinitialiser les collecteurs à chaque tentative
+    entries.length = 0;
+    sceneBlocks.length = 0;
+    decodeError = null;
+    return ffmpeg.exec([
       '-hide_banner',
       '-nostdin',
       '-i', inputName,
       '-map', '0:v:0',
-      '-vf', 'showinfo',
+      '-vf', filter,
       '-fps_mode', 'passthrough', // jamais de cadence forcée
       '-f', 'null',
       '-',
     ]);
+  };
+
+  try {
+    exitCode = await runAnalysis(FILTER_WITH_SCENE);
+    if (exitCode !== 0) {
+      // Repli : filtre étendu non supporté par ce build
+      exitCode = await runAnalysis(FILTER_BASIC);
+    }
   } finally {
     currentLogHandler = null;
     currentProgressHandler = null;
@@ -325,10 +360,40 @@ export async function analyzeVideoFrames(
     if (delta > 0) intervals.push(delta);
   }
 
+  const medianInterval = median(intervals) || 0;
+
+  // Aligner les scores de mouvement sur l'index des frames :
+  // chaque bloc metadata porte son pts_time → index de la frame couvrante
+  // (recherche par pointeur croissant, robuste aux formats d'affichage).
+  let sceneScores: Float64Array | undefined;
+  if (sceneBlocks.length > 0 && ptsTimes.length > 0) {
+    const scores = new Float64Array(ptsTimes.length);
+    let cursor = 0;
+    let matched = 0;
+    const tolerance = Math.max(medianInterval, 1 / 1000);
+    for (const block of sceneBlocks) {
+      while (cursor + 1 < ptsTimes.length && ptsTimes[cursor + 1] <= block.ptsTime) {
+        cursor++;
+      }
+      const distance =
+        cursor < ptsTimes.length ? Math.abs(ptsTimes[cursor] - block.ptsTime) : Infinity;
+      if (distance <= tolerance) {
+        scores[cursor] = block.scene;
+        matched++;
+      }
+    }
+    // Garde-fou : au moins 90 % des frames couvertes, sinon détection
+    // indisponible (résultat faussement incomplet → pas de résultat du tout)
+    if (matched >= ptsTimes.length * 0.9) {
+      sceneScores = scores;
+    }
+  }
+
   return {
     frameCount: entries.length,
     ptsTimes,
-    medianInterval: median(intervals) || 0,
+    medianInterval,
+    sceneScores,
   };
 }
 

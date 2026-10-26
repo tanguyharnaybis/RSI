@@ -7,6 +7,8 @@
 import Chart from 'chart.js/auto';
 import type { Session, Trial, VideoMetadata, VideoFrame, MarkerPoints } from './types';
 import { calculateRSI, calculateRSIFromTimestamps, formatRSIResult } from './calculation';
+import { detectJumps } from './calculation/jumpDetection';
+import type { JumpCandidate } from './calculation/jumpDetection';
 import { determineTimeFactor } from './calculation/timeSource';
 import type { TimeFactor } from './calculation/timeSource';
 import { FrameByFramePlayer } from './video/player';
@@ -48,6 +50,11 @@ interface JumpMeasurement {
 
 let jumpMeasurements: JumpMeasurement[] = [];
 let currentJumpIndex = 0;
+
+// Détection automatique (proposition à valider manuellement)
+let autoCandidates: JumpCandidate[] = [];
+/** Frame du marqueur consulté (retour rapide après vérification) */
+let referenceFrame: number | null = null;
 
 const MAX_JUMPS = 15;
 const DEFAULT_BEST_COUNT = 5;
@@ -124,11 +131,100 @@ function onJumpCountChanged(): void {
 function resetSeries(): void {
   jumpMeasurements = [];
   currentJumpIndex = 0;
+  autoCandidates = [];
+  referenceFrame = null;
   markerManager.clearAllMarkers();
   setMarkingEnabled(true);
   el.btnRestartSeries.style.display = 'none';
   updateJumpProgress();
   displayJumpResults();
+}
+
+// ============================================
+// Détection automatique des sauts (à valider)
+// ============================================
+
+/**
+ * Lance la détection automatique et pré-charge le premier saut proposé.
+ * L'utilisateur valide chaque saut manuellement (ajustement ±1/±10 possible).
+ */
+async function runJumpDetection(): Promise<void> {
+  if (!frameIndex || !currentVideo || !frameIndex.sceneScores) {
+    showAlert('Lancez d\'abord l\'analyse de la vidéo.', 'error');
+    return;
+  }
+  if (jumpMeasurements.length > 0) {
+    const ok = window.confirm(
+      `Relancer la détection réinitialise la série en cours ` +
+      `(${jumpMeasurements.length} saut(s) validé(s) non sauvegardé(s)). Continuer ?`
+    );
+    if (!ok) return;
+  }
+
+  const tf = timeFactor();
+  const frameTimes = new Float64Array(frameIndex.ptsTimes.length);
+  for (let i = 0; i < frameTimes.length; i++) {
+    frameTimes[i] = frameIndex.ptsTimes[i] / tf.factor;
+  }
+
+  const result = detectJumps({
+    sceneScores: frameIndex.sceneScores,
+    frameTimes,
+    expectedJumps: selectedJumpCount(),
+  });
+  autoCandidates = result.jumps;
+
+  if (autoCandidates.length === 0) {
+    showAlert(
+      'Aucun saut détecté automatiquement — utilisez le marquage manuel. ' +
+      '(Le protocole de filmage aide : strict profil, cadre stable, sujet seul.)',
+      'error'
+    );
+    return;
+  }
+
+  jumpMeasurements = [];
+  currentJumpIndex = 0;
+  setMarkingEnabled(true);
+  el.btnRestartSeries.style.display = 'none';
+  loadCandidate(0);
+
+  showAlert(
+    `${autoCandidates.length} saut(s) détecté(s) (confiance ${result.confidence}` +
+    `${autoCandidates.length !== selectedJumpCount()
+      ? `, ${selectedJumpCount()} attendus` : ''}) — ` +
+    'saut 1 pré-chargé : vérifiez chaque marqueur (chip cliquable, frame précédente, ±1/±10) puis validez.',
+    'success'
+  );
+}
+
+/**
+ * Pré-charge un saut détecté dans les marqueurs du saut courant et
+ * positionne la vidéo sur l'atterrissage proposé.
+ */
+function loadCandidate(candidateIndex: number): void {
+  if (!frameIndex || candidateIndex >= autoCandidates.length) return;
+  const candidate = autoCandidates[candidateIndex];
+  if (!videoPlayer) return;
+
+  const ptsTimes = frameIndex.ptsTimes;
+  markerManager.clearAllMarkers();
+  const mkFrame = (frameNumber: number): VideoFrame => ({
+    frameNumber,
+    timestamp:
+      frameNumber < ptsTimes.length
+        ? ptsTimes[frameNumber]
+        : frameNumber / (currentVideo?.fps || 240),
+  });
+  markerManager.setMarker(MARKER_TYPES.LANDING, mkFrame(candidate.landingFrame));
+  markerManager.setMarker(MARKER_TYPES.TAKEOFF, mkFrame(candidate.takeoffFrame));
+  markerManager.setMarker(MARKER_TYPES.FINAL_LANDING, mkFrame(candidate.finalLandingFrame));
+
+  // Positionner sur l'atterrissage proposé et mémoriser la référence
+  videoPlayer.goToFrame(candidate.landingFrame);
+  referenceFrame = candidate.landingFrame;
+  el.btnReturnMarker.style.display = 'inline-flex';
+  updateJumpProgress();
 }
 
 function setMarkingEnabled(enabled: boolean): void {
@@ -216,6 +312,13 @@ function validateJump(): void {
         `Série complète : ${jumpMeasurements.length} sauts — moyenne des ${best.count} meilleurs : ` +
         `${best.mean} ± ${best.stdDev} m/s.`,
         'success'
+      );
+    } else if (autoCandidates.length > currentJumpIndex) {
+      // Détection automatique : pré-charger le saut suivant
+      loadCandidate(currentJumpIndex);
+      showAlert(
+        `Saut ${currentJumpIndex + 1} pré-chargé — vérifiez les marqueurs puis validez.`,
+        'info'
       );
     }
   } catch (error) {
@@ -366,6 +469,8 @@ const el = {
   get bestCountGroup() { return $('best-count-group'); },
   get jumpProgress() { return $('jump-progress'); },
   get btnRestartSeries() { return $<HTMLButtonElement>('btn-restart-series'); },
+  get btnAutoDetect() { return $<HTMLButtonElement>('btn-auto-detect'); },
+  get btnReturnMarker() { return $<HTMLButtonElement>('btn-return-marker'); },
 };
 
 // ============================================
@@ -482,6 +587,32 @@ function bindEvents(): void {
     displayJumpResults();
     updateJumpProgress();
   });
+
+  // Détection automatique + retour au marqueur
+  el.btnAutoDetect.addEventListener('click', () => void runJumpDetection());
+  el.btnReturnMarker.addEventListener('click', () => {
+    if (referenceFrame !== null && videoPlayer) {
+      videoPlayer.goToFrame(referenceFrame);
+    }
+  });
+
+  // Chips cliquables : afficher la frame d'un marqueur (et la mémoriser
+  // comme référence pour le bouton « Revenir au marqueur »)
+  const markerChips: Array<{ id: string; type: MarkerType }> = [
+    { id: 'chip-landing', type: MARKER_TYPES.LANDING },
+    { id: 'chip-takeoff', type: MARKER_TYPES.TAKEOFF },
+    { id: 'chip-finalLanding', type: MARKER_TYPES.FINAL_LANDING },
+  ];
+  for (const { id, type } of markerChips) {
+    document.getElementById(id)?.addEventListener('click', () => {
+      const marker = markerManager.getMarker(type);
+      if (marker && videoPlayer) {
+        videoPlayer.goToFrame(marker.frameNumber);
+        referenceFrame = marker.frameNumber;
+        el.btnReturnMarker.style.display = 'inline-flex';
+      }
+    });
+  }
 
   // Session
   el.btnNewSession.addEventListener('click', createNewSession);
@@ -654,6 +785,9 @@ async function handleVideoUpload(file: File): Promise<void> {
   el.btnFfmpegAnalyze.style.display = 'none';
   el.videoInfo.textContent = 'Analyse des frames par le moteur ffmpeg…';
 
+  el.btnAutoDetect.style.display = 'none';
+  el.btnReturnMarker.style.display = 'none';
+  referenceFrame = null;
   void runFfmpegAnalysis();
 }
 
@@ -970,6 +1104,10 @@ async function runFfmpegAnalysis(): Promise<void> {
     ffmpegSetProgress(null);
     updateVideoInfo();
     updateFrameUI(0);
+
+    // Détection automatique disponible si les scores de mouvement ont été
+    // collectés pendant le décodage
+    el.btnAutoDetect.style.display = frameIndex.sceneScores ? 'block' : 'none';
 
     const tf = timeFactor();
     const realDuration = (index.frameCount * index.medianInterval) / tf.factor;

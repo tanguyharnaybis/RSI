@@ -260,7 +260,7 @@
       color: var(--text-muted);
       background: var(--bg-secondary);
     }
-    .marker-chip.set { color: var(--text-primary); border-color: currentColor; }
+    .marker-chip.set { color: var(--text-primary); border-color: currentColor; cursor: pointer; }
     .marker-chip.set.landing { color: var(--success); }
     .marker-chip.set.takeoff { color: var(--warning); }
     .marker-chip.set.finalLanding { color: var(--danger); }
@@ -505,6 +505,7 @@
         </div>
       </div>
       <p class="hint">Naviguez frame par frame puis marquez : 1) premier contact des orteils, 2) dernier contact au décollage, 3) nouvel atterrissage — pour <strong>chaque saut</strong>, puis validez le saut.</p>
+      <button id="btn-auto-detect" class="btn btn-block" style="display:none; margin-bottom:10px">Détecter les sauts automatiquement</button>
       <div id="jump-progress" class="hint" style="font-weight:600; color:var(--primary); margin-bottom:8px;">Saut 1 / 1</div>
       <div class="button-grid">
         <button id="btn-mark-landing" class="btn btn-success">1. Atterrissage</button>
@@ -517,6 +518,11 @@
         <span class="marker-chip" id="chip-takeoff">Décollage : —</span>
         <span class="marker-chip" id="chip-finalLanding">Atterrissage final : —</span>
       </div>
+      <p class="hint" style="margin-top:6px">
+        Chips cliquables : affichent la frame du marqueur. Pour vérifier un changement d'état, reculez
+        d'une frame avec « ◀ Frame » puis revenez avec le bouton ci-dessous.
+      </p>
+      <button id="btn-return-marker" class="btn btn-sm" style="display:none; margin-top:4px">↩ Revenir au marqueur consulté</button>
       <div style="margin-top:14px">
         <button id="btn-calculate" class="btn btn-primary btn-block" disabled>Valider le saut</button>
         <button id="btn-restart-series" class="btn btn-block" style="display:none">Recommencer la série</button>

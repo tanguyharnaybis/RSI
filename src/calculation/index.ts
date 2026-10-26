@@ -4,3 +4,4 @@
  */
 
 export * from './formulas';
+export * from './jumpDetection';

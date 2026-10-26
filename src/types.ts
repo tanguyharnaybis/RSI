@@ -41,6 +41,12 @@ export interface FrameIndex {
   ptsTimes: Float64Array;
   /** Intervalle vidéo médian entre frames consécutives (secondes) */
   medianInterval: number;
+  /**
+   * Score de mouvement entre chaque frame et la précédente (ffmpeg scene,
+   * 0..1) — base de la détection automatique des contacts.
+   * Absent si le filtre n'a pas pu être appliqué.
+   */
+  sceneScores?: Float64Array;
 }
 
 /** Métadonnées de la vidéo chargée */
