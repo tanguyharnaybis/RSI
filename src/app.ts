@@ -33,6 +33,274 @@ let currentVideo: VideoMetadata | null = null;
 let currentFile: File | null = null;
 let frameIndex: FrameIndex | null = null;
 let currentSession: Session | null = null;
+
+// ============================================
+// Série de sauts (protocole multi-sauts)
+// ============================================
+
+/** Un saut validé de la série en cours */
+interface JumpMeasurement {
+  formatted: { contactTimeMs: number; flightTimeMs: number; heightCm: number; rsi: number; modifiedRsi: number };
+  markers: MarkerPoints;
+  times: { landing: number; takeoff: number; finalLanding: number } | null;
+  timeSourceLabel: string;
+}
+
+let jumpMeasurements: JumpMeasurement[] = [];
+let currentJumpIndex = 0;
+
+const MAX_JUMPS = 15;
+const DEFAULT_BEST_COUNT = 5;
+
+function selectedJumpCount(): number {
+  return clamp(parseInt(el.jumpCountSelect.value, 10) || 1, 1, MAX_JUMPS);
+}
+
+function selectedBestCount(): number {
+  const jumps = selectedJumpCount();
+  return clamp(parseInt(el.bestCountSelect.value, 10) || DEFAULT_BEST_COUNT, 1, jumps);
+}
+
+function seriesComplete(): boolean {
+  return currentJumpIndex >= selectedJumpCount();
+}
+
+/** Initialise les listes déroulantes du protocole (persistées) */
+function initJumpProtocolControls(): void {
+  const savedJumps = clamp(
+    parseInt(localStorage.getItem('rsi-calc-jump-count') || '', 10) || 1,
+    1, MAX_JUMPS
+  );
+  const savedBest = clamp(
+    parseInt(localStorage.getItem('rsi-calc-best-count') || '', 10) || DEFAULT_BEST_COUNT,
+    1, MAX_JUMPS
+  );
+
+  el.jumpCountSelect.innerHTML = '';
+  for (let i = 1; i <= MAX_JUMPS; i++) {
+    const option = document.createElement('option');
+    option.value = String(i);
+    option.textContent = i === 1 ? '1 (saut unique)' : String(i);
+    el.jumpCountSelect.appendChild(option);
+  }
+  el.jumpCountSelect.value = String(savedJumps);
+
+  rebuildBestCountOptions(Math.min(savedBest, savedJumps));
+  updateJumpProgress();
+}
+
+/** Reconstruit les options « moyenne des N meilleurs » (1..nb sauts) */
+function rebuildBestCountOptions(value: number): void {
+  const jumps = selectedJumpCount();
+  el.bestCountGroup.style.display = jumps > 1 ? 'flex' : 'none';
+  el.bestCountSelect.innerHTML = '';
+  for (let i = 1; i <= jumps; i++) {
+    const option = document.createElement('option');
+    option.value = String(i);
+    option.textContent = i === 1 ? '1 (RSI du meilleur saut)' : `${i} meilleurs`;
+    el.bestCountSelect.appendChild(option);
+  }
+  el.bestCountSelect.value = String(clamp(value, 1, jumps));
+}
+
+function onJumpCountChanged(): void {
+  if (jumpMeasurements.length > 0 || currentJumpIndex > 0) {
+    const ok = window.confirm(
+      'Changer le nombre de sauts réinitialise la série en cours ' +
+      `(${jumpMeasurements.length} saut(s) validé(s) non sauvegardé(s)). Continuer ?`
+    );
+    if (!ok) {
+      initJumpProtocolControls();
+      return;
+    }
+  }
+  localStorage.setItem('rsi-calc-jump-count', String(selectedJumpCount()));
+  resetSeries();
+  rebuildBestCountOptions(selectedBestCount());
+  localStorage.setItem('rsi-calc-best-count', String(selectedBestCount()));
+  updateJumpProgress();
+}
+
+function resetSeries(): void {
+  jumpMeasurements = [];
+  currentJumpIndex = 0;
+  markerManager.clearAllMarkers();
+  setMarkingEnabled(true);
+  el.btnRestartSeries.style.display = 'none';
+  updateJumpProgress();
+  displayJumpResults();
+}
+
+function setMarkingEnabled(enabled: boolean): void {
+  el.btnMarkLanding.disabled = !enabled;
+  el.btnMarkTakeoff.disabled = !enabled;
+  el.btnMarkFinalLanding.disabled = !enabled;
+  el.btnResetMarkers.disabled = !enabled;
+  if (!enabled) {
+    el.btnCalculate.disabled = true;
+  }
+}
+
+function updateJumpProgress(): void {
+  const total = selectedJumpCount();
+  if (seriesComplete()) {
+    el.jumpProgress.textContent = `Série terminée — ${jumpMeasurements.length}/${total} saut(s) validé(s)`;
+  } else {
+    el.jumpProgress.textContent = `Saut ${currentJumpIndex + 1} / ${total}` +
+      (jumpMeasurements.length > 0 ? ` — ${jumpMeasurements.length} validé(s)` : '');
+  }
+}
+
+/** Valide le saut courant : calcule son RSI et passe au suivant */
+function validateJump(): void {
+  if (!currentVideo || !markerManager.areMarkersValid()) {
+    showAlert('Marquez les 3 frames du saut courant avant de valider.', 'error');
+    return;
+  }
+  if (seriesComplete()) {
+    showAlert('Série complète — utilisez « Recommencer la série » pour reprendre.', 'info');
+    return;
+  }
+
+  const markers = markerManager.getAllMarkers();
+  const landing = markers.landing!;
+  const takeoff = markers.takeoff!;
+  const finalLanding = markers.finalLanding!;
+
+  try {
+    const t1 = realTimeOfFrame(landing.frameNumber);
+    const t2 = realTimeOfFrame(takeoff.frameNumber);
+    const t3 = realTimeOfFrame(finalLanding.frameNumber);
+
+    let result;
+    let times: { landing: number; takeoff: number; finalLanding: number } | null = null;
+    let label: string;
+    if (t1 !== null && t2 !== null && t3 !== null) {
+      result = calculateRSIFromTimestamps(t1, t2, t3, gravity);
+      times = { landing: t1, takeoff: t2, finalLanding: t3 };
+      label = timeFactor().label;
+    } else {
+      const effectiveFps = currentVideo.fps * getDuplicationFactor();
+      result = calculateRSI(
+        landing.frameNumber,
+        takeoff.frameNumber,
+        finalLanding.frameNumber,
+        effectiveFps,
+        gravity
+      );
+      label = `FPS d'enregistrement saisi (${currentVideo.fps}) — cadence constante supposée`;
+    }
+
+    jumpMeasurements.push({
+      formatted: formatRSIResult(result),
+      markers: { landing, takeoff, finalLanding },
+      times,
+      timeSourceLabel: label,
+    });
+
+    markerManager.clearAllMarkers();
+    currentJumpIndex++;
+    updateJumpProgress();
+    displayJumpResults();
+
+    showAlert(
+      `Saut ${currentJumpIndex} validé : RSI ${formatRSIResult(result).rsi} m/s (${label}).`,
+      'success'
+    );
+
+    if (seriesComplete()) {
+      setMarkingEnabled(false);
+      el.btnRestartSeries.style.display = 'block';
+      const best = bestJumpStats();
+      showAlert(
+        `Série complète : ${jumpMeasurements.length} sauts — moyenne des ${best.count} meilleurs : ` +
+        `${best.mean} ± ${best.stdDev} m/s.`,
+        'success'
+      );
+    }
+  } catch (error) {
+    console.error(error);
+    showAlert(`Erreur de calcul : ${error instanceof Error ? error.message : String(error)}`, 'error');
+  }
+}
+
+/** Moyenne et écart-type des N meilleurs RSI (N = sélection utilisateur) */
+function bestJumpStats(): { count: number; mean: number; stdDev: number } {
+  const best = clamp(selectedBestCount(), 1, Math.max(1, jumpMeasurements.length));
+  const sorted = [...jumpMeasurements]
+    .map((m) => m.formatted.rsi)
+    .sort((a, b) => b - a);
+  const top = sorted.slice(0, best);
+  const mean = top.reduce((sum, r) => sum + r, 0) / top.length;
+  const variance =
+    top.length > 1
+      ? top.reduce((sum, r) => sum + Math.pow(r - mean, 2), 0) / (top.length - 1)
+      : 0;
+  return {
+    count: top.length,
+    mean: parseFloat(mean.toFixed(2)),
+    stdDev: parseFloat(Math.sqrt(variance).toFixed(2)),
+  };
+}
+
+/** Affiche la liste des sauts validés + la moyenne des N meilleurs */
+function displayJumpResults(): void {
+  const container = el.resultsContent;
+  container.innerHTML = '';
+
+  if (jumpMeasurements.length === 0) {
+    container.innerHTML =
+      '<p class="empty-state">Marquez les 3 frames d\'un saut puis validez-le.</p>';
+    return;
+  }
+
+  // Liste des sauts
+  const list = document.createElement('div');
+  list.className = 'jump-list';
+  jumpMeasurements.forEach((measurement, index) => {
+    const row = document.createElement('div');
+    row.className = 'jump-row';
+    const name = document.createElement('span');
+    name.className = 'jump-name';
+    name.textContent = `Saut ${index + 1}`;
+    const details = document.createElement('span');
+    details.className = 'jump-details';
+    details.textContent =
+      `RSI ${measurement.formatted.rsi} m/s · contact ${measurement.formatted.contactTimeMs} ms · ` +
+      `vol ${measurement.formatted.flightTimeMs} ms · h ${measurement.formatted.heightCm} cm`;
+    row.append(name, details);
+    list.appendChild(row);
+  });
+  container.appendChild(list);
+
+  // Résumé : moyenne des N meilleurs
+  const best = bestJumpStats();
+  const summary = document.createElement('div');
+  summary.className = 'result-item';
+  summary.style.marginTop = '10px';
+  const label = document.createElement('span');
+  label.className = 'result-label';
+  label.textContent =
+    `Moyenne des ${best.count} meilleurs` +
+    (jumpMeasurements.length > best.count
+      ? ` (sur ${jumpMeasurements.length} mesurés${seriesComplete() ? '' : ' — série en cours'})`
+      : '');
+  const value = document.createElement('span');
+  value.className = 'result-value highlight';
+  value.textContent = String(best.mean);
+  const unit = document.createElement('span');
+  unit.className = 'result-unit';
+  unit.textContent = `± ${best.stdDev} m/s`;
+  summary.append(label, value, unit);
+  container.appendChild(summary);
+
+  // Source des temps
+  const source = document.createElement('p');
+  source.className = 'hint';
+  source.style.marginTop = '8px';
+  source.textContent = `Source des temps : ${jumpMeasurements[0].timeSourceLabel}`;
+  container.appendChild(source);
+}
 let sessions: Session[] = [];
 let gravity = 9.81;
 let progressChart: Chart | null = null;
@@ -91,6 +359,11 @@ const el = {
   get ffmpegProgressFill() { return $('ffmpeg-progress-fill'); },
   get btnFfmpegPreload() { return $<HTMLButtonElement>('btn-ffmpeg-preload'); },
   get ffmpegPreloadStatus() { return $('ffmpeg-preload-status'); },
+  get jumpCountSelect() { return $<HTMLSelectElement>('jump-count'); },
+  get bestCountSelect() { return $<HTMLSelectElement>('best-count'); },
+  get bestCountGroup() { return $('best-count-group'); },
+  get jumpProgress() { return $('jump-progress'); },
+  get btnRestartSeries() { return $<HTMLButtonElement>('btn-restart-series'); },
 };
 
 // ============================================
@@ -101,10 +374,12 @@ export async function initApp(): Promise<void> {
   applySavedTheme();
   bindEvents();
   markerManager.addEventListener('marker:change', () => updateMarkerChips());
+  initJumpProtocolControls();
   await refreshSessions();
   updateHistory();
   updateChart();
   updateMarkerChips();
+  displayJumpResults();
   el.loadingFallback.classList.add('hidden');
 }
 
@@ -193,7 +468,16 @@ function bindEvents(): void {
   el.btnMarkTakeoff.addEventListener('click', () => markFrame(MARKER_TYPES.TAKEOFF));
   el.btnMarkFinalLanding.addEventListener('click', () => markFrame(MARKER_TYPES.FINAL_LANDING));
   el.btnResetMarkers.addEventListener('click', resetMarkers);
-  el.btnCalculate.addEventListener('click', calculateRSIFromMarkers);
+  el.btnCalculate.addEventListener('click', validateJump);
+  el.btnRestartSeries.addEventListener('click', resetSeries);
+
+  // Protocole multi-sauts
+  el.jumpCountSelect.addEventListener('change', onJumpCountChanged);
+  el.bestCountSelect.addEventListener('change', () => {
+    localStorage.setItem('rsi-calc-best-count', String(selectedBestCount()));
+    displayJumpResults();
+    updateJumpProgress();
+  });
 
   // Session
   el.btnNewSession.addEventListener('click', createNewSession);
@@ -291,6 +575,17 @@ async function handleVideoUpload(file: File): Promise<void> {
     );
     return;
   }
+
+  // Une nouvelle vidéo = une nouvelle série : confirmer la perte des
+  // sauts validés non sauvegardés.
+  if (jumpMeasurements.length > 0) {
+    const ok = window.confirm(
+      `Importer une nouvelle vidéo réinitialise la série en cours ` +
+      `(${jumpMeasurements.length} saut(s) validé(s) non sauvegardé(s)). Continuer ?`
+    );
+    if (!ok) return;
+  }
+  resetSeries();
 
   let metadata;
   try {
@@ -498,8 +793,9 @@ function updateMarkerChips(): void {
     chip.classList.toggle(key, m !== null);
   }
 
-  // Activer le bouton calcul si les marqueurs sont valides
-  el.btnCalculate.disabled = !markerManager.areMarkersValid();
+  // Activer le bouton de validation si les marqueurs du saut sont valides
+  // et que la série n'est pas terminée
+  el.btnCalculate.disabled = !markerManager.areMarkersValid() || seriesComplete();
 
   // Marqueurs sur la timeline
   el.timeline.querySelectorAll('.tl-marker').forEach((n) => n.remove());
@@ -694,96 +990,6 @@ async function runFfmpegAnalysis(): Promise<void> {
   }
 }
 
-function calculateRSIFromMarkers(): void {
-  if (!currentVideo || !markerManager.areMarkersValid()) {
-    showAlert('Marquez les 3 frames dans l\'ordre : atterrissage, décollage, atterrissage final.', 'error');
-    return;
-  }
-
-  const markers = markerManager.getAllMarkers();
-  const landing = markers.landing!;
-  const takeoff = markers.takeoff!;
-  const finalLanding = markers.finalLanding!;
-
-  try {
-    // Temps réels issus de l'index ffmpeg (différence de timestamps,
-    // VFR-exacte) ; la source du facteur (timestamps ou FPS saisi) est
-    // déterminée par timeFactor() et affichée.
-    const t1 = realTimeOfFrame(landing.frameNumber);
-    const t2 = realTimeOfFrame(takeoff.frameNumber);
-    const t3 = realTimeOfFrame(finalLanding.frameNumber);
-
-    let result;
-    let method: string;
-    if (t1 !== null && t2 !== null && t3 !== null) {
-      result = calculateRSIFromTimestamps(t1, t2, t3, gravity);
-      method = timeFactor().label;
-    } else {
-      // Sans index : cadence supposée constante (fps × duplication)
-      const effectiveFps = currentVideo.fps * getDuplicationFactor();
-      result = calculateRSI(
-        landing.frameNumber,
-        takeoff.frameNumber,
-        finalLanding.frameNumber,
-        effectiveFps,
-        gravity
-      );
-      method = `FPS d'enregistrement saisi (${currentVideo.fps}) — cadence constante supposée`;
-    }
-    const formatted = formatRSIResult(result);
-    displayResults(formatted, method);
-    showAlert(`RSI calculé — source des temps : ${method}.`, 'success');
-  } catch (error) {
-    console.error(error);
-    showAlert(`Erreur de calcul : ${error instanceof Error ? error.message : String(error)}`, 'error');
-  }
-}
-
-function displayResults(formatted: {
-  contactTimeMs: number;
-  flightTimeMs: number;
-  heightCm: number;
-  rsi: number;
-  modifiedRsi: number;
-}, timeSourceLabel: string): void {
-  const items = [
-    { label: 'Temps de contact', value: formatted.contactTimeMs, unit: 'ms' },
-    { label: 'Temps de vol', value: formatted.flightTimeMs, unit: 'ms' },
-    { label: 'Hauteur', value: formatted.heightCm, unit: 'cm' },
-    { label: 'RSI', value: formatted.rsi, unit: 'm/s', highlight: true },
-    { label: 'RSI modifié', value: formatted.modifiedRsi, unit: 'm/s' },
-  ];
-
-  el.resultsContent.innerHTML = '';
-  const grid = document.createElement('div');
-  grid.className = 'results-grid';
-  for (const item of items) {
-    const box = document.createElement('div');
-    box.className = 'result-item';
-    const label = document.createElement('span');
-    label.className = 'result-label';
-    label.textContent = item.label;
-    const value = document.createElement('span');
-    value.className = item.highlight ? 'result-value highlight' : 'result-value';
-    value.textContent = String(item.value);
-    const unit = document.createElement('span');
-    unit.className = 'result-unit';
-    unit.textContent = item.unit;
-    box.append(label, value, unit);
-    grid.appendChild(box);
-  }
-  el.resultsContent.appendChild(grid);
-
-  // Source des temps toujours affichée avec les résultats
-  const source = document.createElement('p');
-  source.className = 'hint';
-  source.style.marginTop = '10px';
-  source.textContent = `Source des temps : ${timeSourceLabel}`;
-  el.resultsContent.appendChild(source);
-
-  updateSessionStatsDisplay();
-}
-
 // ============================================
 // Sessions et essais
 // ============================================
@@ -815,45 +1021,41 @@ async function saveCurrentTrial(): Promise<void> {
     showAlert('Créez d\'abord une session (bouton « Nouvelle session »).', 'error');
     return;
   }
-  if (!currentVideo || !markerManager.areMarkersValid()) {
-    showAlert('Importez une vidéo et marquez les 3 frames.', 'error');
+  if (!currentVideo) {
+    showAlert('Importez une vidéo.', 'error');
+    return;
+  }
+  if (jumpMeasurements.length === 0) {
+    showAlert('Aucun saut validé à sauvegarder — marquez les 3 frames puis « Valider le saut ».', 'error');
     return;
   }
 
-  // Priorité à la méthode VFR-exact (timestamps réels de l'index ffmpeg) ;
-  // sinon cadence constante supposée (fps d'enregistrement × duplication).
-  const markers = markerManager.getAllMarkers();
-  const t1 = realTimeOfFrame(markers.landing!.frameNumber);
-  const t2 = realTimeOfFrame(markers.takeoff!.frameNumber);
-  const t3 = realTimeOfFrame(markers.finalLanding!.frameNumber);
-
-  let trial: Trial;
-  if (t1 !== null && t2 !== null && t3 !== null) {
-    trial = createTrialFromTimestamps(
-      currentSession.id,
-      {
-        landing: markers.landing!.frameNumber,
-        takeoff: markers.takeoff!.frameNumber,
-        finalLanding: markers.finalLanding!.frameNumber,
-      },
-      { landing: t1, takeoff: t2, finalLanding: t3 },
-      currentVideo,
-      gravity,
-      timeFactor().label
-    );
-  } else {
-    const effectiveMetadata = { ...currentVideo, fps: currentVideo.fps * getDuplicationFactor() };
-    trial = createTrialFromMarkers(
-      currentSession.id,
-      markers,
-      effectiveMetadata,
-      gravity
-    );
-  }
-
   try {
-    await storage.addTrial(currentSession.id, trial);
-    currentSession.trials.push(trial);
+    const total = jumpMeasurements.length;
+    for (let i = 0; i < total; i++) {
+      const measurement = jumpMeasurements[i];
+      let trial: Trial;
+      if (measurement.times) {
+        trial = createTrialFromTimestamps(
+          currentSession.id,
+          {
+            landing: measurement.markers.landing!.frameNumber,
+            takeoff: measurement.markers.takeoff!.frameNumber,
+            finalLanding: measurement.markers.finalLanding!.frameNumber,
+          },
+          measurement.times,
+          currentVideo,
+          gravity,
+          `Saut ${i + 1}/${total} — ${measurement.timeSourceLabel}`
+        );
+      } else {
+        const effectiveMetadata = { ...currentVideo, fps: currentVideo.fps * getDuplicationFactor() };
+        trial = createTrialFromMarkers(currentSession.id, measurement.markers, effectiveMetadata, gravity);
+        trial.notes = `Saut ${i + 1}/${total} — ${measurement.timeSourceLabel}`;
+      }
+      await storage.addTrial(currentSession.id, trial);
+      currentSession.trials.push(trial);
+    }
     currentSession.updatedAt = Date.now();
     await storage.saveSession(currentSession);
 
@@ -861,14 +1063,17 @@ async function saveCurrentTrial(): Promise<void> {
     const stored = await storage.getSession(currentSession.id);
     if (stored) currentSession = stored;
 
-    resetMarkers();
     updateHistory();
     updateChart();
     updateSessionStatsDisplay();
-    showAlert('Essai sauvegardé.', 'success');
+    showAlert(
+      `${total} saut(s) sauvegardé(s) dans « ${currentSession.name} » — ` +
+      `moyenne des ${bestJumpStats().count} meilleurs : ${bestJumpStats().mean} m/s.`,
+      'success'
+    );
   } catch (error) {
     console.error(error);
-    showAlert('Erreur lors de la sauvegarde de l\'essai.', 'error');
+    showAlert('Erreur lors de la sauvegarde des sauts.', 'error');
   }
 }
 

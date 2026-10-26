@@ -233,7 +233,8 @@
     }
     .form-group { display: flex; flex-direction: column; gap: 4px; }
     .form-group label { font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); }
-    .form-group input {
+    .form-group input,
+    .form-group select {
       min-height: 48px;
       padding: 8px 12px;
       font-size: 1rem;
@@ -288,6 +289,20 @@
     .result-value { font-size: 1.5rem; font-weight: 700; color: var(--primary); }
     .result-value.highlight { color: #ffd54f; }
     .result-unit { font-size: 0.8rem; color: var(--text-secondary); margin-left: 3px; }
+
+    /* Liste des sauts validés */
+    .jump-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: baseline;
+      gap: 4px 10px;
+      padding: 8px 0;
+      border-bottom: 1px solid var(--border);
+      font-size: 0.9rem;
+    }
+    .jump-row:last-child { border-bottom: none; }
+    .jump-name { font-weight: 700; color: var(--primary); min-width: 64px; }
+    .jump-details { color: var(--text-secondary); font-size: 0.85rem; }
 
     .session-stats {
       margin-top: 14px;
@@ -477,12 +492,23 @@
     <!-- 3. Marquage -->
     <section class="section">
       <h2>3. Marquage des frames</h2>
-      <p class="hint">Naviguez frame par frame puis marquez : 1) premier contact des orteils, 2) dernier contact au décollage, 3) nouvel atterrissage.</p>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="jump-count">Sauts à mesurer dans la vidéo</label>
+          <select id="jump-count" class="form-select"></select>
+        </div>
+        <div class="form-group" id="best-count-group" style="display:none">
+          <label for="best-count">Moyenne sur les N meilleurs</label>
+          <select id="best-count" class="form-select"></select>
+        </div>
+      </div>
+      <p class="hint">Naviguez frame par frame puis marquez : 1) premier contact des orteils, 2) dernier contact au décollage, 3) nouvel atterrissage — pour <strong>chaque saut</strong>, puis validez le saut.</p>
+      <div id="jump-progress" class="hint" style="font-weight:600; color:var(--primary); margin-bottom:8px;">Saut 1 / 1</div>
       <div class="button-grid">
         <button id="btn-mark-landing" class="btn btn-success">1. Atterrissage</button>
         <button id="btn-mark-takeoff" class="btn btn-warning">2. Décollage</button>
         <button id="btn-mark-final-landing" class="btn btn-danger">3. Atterrissage final</button>
-        <button id="btn-reset-markers" class="btn">Réinitialiser</button>
+        <button id="btn-reset-markers" class="btn">Réinitialiser le saut</button>
       </div>
       <div id="marker-status">
         <span class="marker-chip" id="chip-landing">Atterrissage : —</span>
@@ -490,7 +516,8 @@
         <span class="marker-chip" id="chip-finalLanding">Atterrissage final : —</span>
       </div>
       <div style="margin-top:14px">
-        <button id="btn-calculate" class="btn btn-primary btn-block" disabled>Calculer le RSI</button>
+        <button id="btn-calculate" class="btn btn-primary btn-block" disabled>Valider le saut</button>
+        <button id="btn-restart-series" class="btn btn-block" style="display:none">Recommencer la série</button>
       </div>
     </section>
 
@@ -518,7 +545,7 @@
       </div>
       <div class="button-grid" style="margin-top:12px">
         <button id="btn-new-session" class="btn btn-primary">Nouvelle session</button>
-        <button id="btn-save-trial" class="btn btn-success">Sauvegarder l'essai</button>
+        <button id="btn-save-trial" class="btn btn-success">Sauvegarder les sauts dans la session</button>
         <button id="btn-export-csv" class="btn btn-sm">Export CSV</button>
         <button id="btn-export-json" class="btn btn-sm">Export JSON</button>
       </div>
