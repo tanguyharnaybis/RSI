@@ -486,6 +486,32 @@
           <span id="frame-counter">Frame 0 / 0</span>
         </div>
 
+        <!-- Détection pose IA + validation des sauts (sous la vidéo) -->
+        <button id="btn-auto-detect" class="btn btn-block" style="display:none; margin-top:12px">Détecter les sauts (IA de pose)</button>
+        <div id="pose-panel" style="display:none; margin-top:8px">
+          <div id="pose-status" class="hint" aria-live="polite"></div>
+          <div id="pose-progress" style="display:none; margin-top:6px; height:8px; background:var(--bg-secondary); border-radius:999px; overflow:hidden">
+            <div id="pose-progress-fill" style="height:100%; width:0%; background:var(--primary); transition:width 0.2s ease"></div>
+          </div>
+          <div id="pose-jump-list"></div>
+          <div id="pose-current" style="display:none">
+            <div class="button-grid" style="margin-bottom:8px">
+              <button id="btn-pose-prev-event" class="btn" title="Aller à l'événement détecté précédent">◀ Événement précédent</button>
+              <button id="btn-pose-next-event" class="btn" title="Aller à l'événement détecté suivant">Événement suivant ▶</button>
+            </div>
+            <div id="pose-event-rows"></div>
+            <p class="hint" style="margin:6px 0 0">En pogo jumps, l'événement 3 d'un saut est aussi l'événement 1 du saut suivant : ce contact est partagé, c'est normal.</p>
+            <div id="pose-live-metrics" class="hint" style="font-weight:600; color:var(--primary); margin:8px 0"></div>
+            <div id="pose-visibility-warning" class="hint" style="display:none; color:var(--warning, #e6a23c)"></div>
+            <div class="button-grid">
+              <button id="btn-pose-validate" class="btn btn-primary">Valider ce saut</button>
+              <button id="btn-pose-reject" class="btn btn-danger">Rejeter ce saut</button>
+            </div>
+            <button id="btn-pose-validate-all" class="btn btn-block" style="margin-top:8px">Tout valider</button>
+          </div>
+          <div id="pose-rejected-list"></div>
+        </div>
+
         <div class="timeline-wrap">
           <div class="timeline" id="timeline" aria-label="Timeline vidéo">
             <div class="timeline-fill" id="timeline-fill"></div>
@@ -539,28 +565,7 @@
           <select id="best-count" class="form-select"></select>
         </div>
       </div>
-      <p class="hint">Naviguez frame par frame puis marquez : 1) premier contact des orteils, 2) dernier contact au décollage, 3) nouvel atterrissage — pour <strong>chaque saut</strong>, puis validez le saut.</p>
-      <button id="btn-auto-detect" class="btn btn-block" style="display:none; margin-bottom:10px">Détecter les sauts (IA de pose)</button>
-
-      <!-- Panneau de validation des sauts proposés par la pose IA -->
-      <div id="pose-panel" style="display:none; margin-bottom:12px">
-        <div id="pose-status" class="hint" aria-live="polite"></div>
-        <div id="pose-progress" style="display:none; margin-top:6px; height:8px; background:var(--bg-secondary); border-radius:999px; overflow:hidden">
-          <div id="pose-progress-fill" style="height:100%; width:0%; background:var(--primary); transition:width 0.2s ease"></div>
-        </div>
-        <div id="pose-jump-list"></div>
-        <div id="pose-current" style="display:none">
-          <div id="pose-event-rows"></div>
-          <div id="pose-live-metrics" class="hint" style="font-weight:600; color:var(--primary); margin:8px 0"></div>
-          <div id="pose-visibility-warning" class="hint" style="display:none; color:var(--warning, #e6a23c)"></div>
-          <div class="button-grid">
-            <button id="btn-pose-validate" class="btn btn-primary">Valider ce saut</button>
-            <button id="btn-pose-reject" class="btn btn-danger">Rejeter ce saut</button>
-          </div>
-          <button id="btn-pose-validate-all" class="btn btn-block" style="margin-top:8px">Tout valider</button>
-        </div>
-        <div id="pose-rejected-list"></div>
-      </div>
+      <p class="hint">Naviguez frame par frame puis marquez : 1) premier contact des orteils, 2) dernier contact au décollage, 3) nouvel atterrissage — pour <strong>chaque saut</strong>, puis validez le saut. La détection IA (bouton sous la vidéo) pré-remplit ces marqueurs.</p>
       <div id="jump-progress" class="hint" style="font-weight:600; color:var(--primary); margin-bottom:8px;">Saut 1 / 1</div>
       <div class="button-grid">
         <button id="btn-mark-landing" class="btn btn-success">1. Atterrissage</button>

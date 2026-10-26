@@ -400,7 +400,7 @@ function renderPoseEventRows(): void {
   const rows: Array<{ label: string; type: MarkerType; key: 'landing' | 'takeoff' | 'finalLanding' }> = [
     { label: '1. Atterrissage (premier contact)', type: MARKER_TYPES.LANDING, key: 'landing' },
     { label: '2. Décollage (dernier contact)', type: MARKER_TYPES.TAKEOFF, key: 'takeoff' },
-    { label: '3. Atterrissage suivant', type: MARKER_TYPES.FINAL_LANDING, key: 'finalLanding' },
+    { label: '3. Atterrissage suivant (= atterrissage du saut suivant)', type: MARKER_TYPES.FINAL_LANDING, key: 'finalLanding' },
   ];
   const container = el.poseEventRows;
   container.innerHTML = '';
@@ -520,6 +520,48 @@ function updatePoseLiveMetrics(): void {
   } else {
     el.poseVisibilityWarning.style.display = 'none';
   }
+}
+
+/** Liste triée et dédupliquée des frames d'événements proposées par la pose */
+function poseEventFrames(): number[] {
+  const frames: number[] = [];
+  for (const proposal of poseProposals) {
+    frames.push(proposal.jump.landingFrame, proposal.jump.takeoffFrame, proposal.jump.finalLandingFrame);
+  }
+  const unique = [...new Set(frames)].sort((a, b) => a - b);
+  return unique;
+}
+
+/**
+ * Positionne la vidéo sur l'événement détecté suivant (+1) ou précédent (-1).
+ * Les contacts partagés entre sauts (atterrissage final N = atterrissage N+1)
+ * ne sont visités qu'une fois.
+ */
+function goToPoseEvent(direction: 1 | -1): void {
+  if (!videoPlayer) return;
+  const frames = poseEventFrames();
+  if (frames.length === 0) {
+    showAlert('Aucun événement détecté — lancez d\'abord la détection IA.', 'info');
+    return;
+  }
+  const current = videoPlayer.getCurrentFrame();
+  let target: number | undefined;
+  if (direction > 0) {
+    target = frames.find((f) => f > current);
+    if (target === undefined) {
+      showAlert('Dernier événement détecté atteint.', 'info');
+      return;
+    }
+  } else {
+    for (const f of frames) {
+      if (f < current) target = f;
+    }
+    if (target === undefined) {
+      showAlert('Premier événement détecté atteint.', 'info');
+      return;
+    }
+  }
+  videoPlayer.goToFrame(target);
 }
 
 /** Liste des sauts proposés (cliquer pour recharger un saut non traité) */
@@ -962,6 +1004,8 @@ const el = {
   get btnPoseValidate() { return $<HTMLButtonElement>('btn-pose-validate'); },
   get btnPoseValidateAll() { return $<HTMLButtonElement>('btn-pose-validate-all'); },
   get btnPoseReject() { return $<HTMLButtonElement>('btn-pose-reject'); },
+  get btnPosePrevEvent() { return $<HTMLButtonElement>('btn-pose-prev-event'); },
+  get btnPoseNextEvent() { return $<HTMLButtonElement>('btn-pose-next-event'); },
 };
 
 // ============================================
@@ -1089,6 +1133,8 @@ function bindEvents(): void {
   el.btnPoseValidate.addEventListener('click', () => validateJump());
   el.btnPoseValidateAll.addEventListener('click', () => validateAllPoseJumps());
   el.btnPoseReject.addEventListener('click', () => rejectPoseProposal());
+  el.btnPosePrevEvent.addEventListener('click', () => goToPoseEvent(-1));
+  el.btnPoseNextEvent.addEventListener('click', () => goToPoseEvent(+1));
 
   // Chips cliquables : afficher la frame d'un marqueur (et la mémoriser
   // comme référence pour le bouton « Revenir au marqueur »)
