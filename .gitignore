@@ -36,3 +36,4 @@ tmp/
 temp/
 *.tmp
 public/ffmpeg/
+public/mediapipe/wasm/

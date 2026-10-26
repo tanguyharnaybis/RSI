@@ -7,8 +7,7 @@
 import Chart from 'chart.js/auto';
 import type { Session, Trial, VideoMetadata, VideoFrame, MarkerPoints } from './types';
 import { calculateRSI, calculateRSIFromTimestamps, formatRSIResult } from './calculation';
-import { detectJumps, estimateDuplication } from './calculation/jumpDetection';
-import type { JumpCandidate } from './calculation/jumpDetection';
+import { estimateDuplication } from './calculation/timeSource';
 import { determineTimeFactor } from './calculation/timeSource';
 import type { TimeFactor } from './calculation/timeSource';
 import { FrameByFramePlayer } from './video/player';
@@ -21,6 +20,10 @@ import { createLocalStorageService } from './storage';
 import type { LocalStorageService } from './storage';
 import { createSession, createTrialFromMarkers, createTrialFromTimestamps } from './storage/session';
 import { calculateSessionStats, getProgressChartData } from './stats';
+import { smooth, estimateGroundLine, adaptiveEpsilon, detectFootEvents, reconstructJumps } from './pose/pogoEvents';
+import type { PogoJump, RejectedJump } from './pose/pogoEvents';
+import { runPoseDetection } from './pose/poseEngine';
+import type { PoseFrameData } from './pose/poseEngine';
 import { clamp } from './utils/helpers';
 
 // ============================================
@@ -51,8 +54,23 @@ interface JumpMeasurement {
 let jumpMeasurements: JumpMeasurement[] = [];
 let currentJumpIndex = 0;
 
-// Détection automatique (proposition à valider manuellement)
-let autoCandidates: JumpCandidate[] = [];
+// Détection par pose IA (proposition à valider manuellement)
+/** Un saut proposé par le pipeline pose IA, avec sa visibilité */
+interface PoseProposal {
+  jump: PogoJump;
+  /** Visibilité minimale des landmarks aux 3 événements */
+  visibility: number;
+  /** Saut validé par l'utilisateur (traité) */
+  validated: boolean;
+  /** Saut rejeté par l'utilisateur (traité) */
+  rejected: boolean;
+}
+
+let poseProposals: PoseProposal[] = [];
+let poseRejectedCycles: RejectedJump[] = [];
+let poseData: PoseFrameData | null = null;
+/** Index du saut proposé actuellement chargé dans les marqueurs */
+let activePoseProposal: number | null = null;
 /** Frame du marqueur consulté (retour rapide après vérification) */
 let referenceFrame: number | null = null;
 /**
@@ -136,7 +154,11 @@ function onJumpCountChanged(): void {
 function resetSeries(): void {
   jumpMeasurements = [];
   currentJumpIndex = 0;
-  autoCandidates = [];
+  poseProposals = [];
+  poseRejectedCycles = [];
+  poseData = null;
+  activePoseProposal = null;
+  hidePosePanel();
   referenceFrame = null;
   markerManager.clearAllMarkers();
   setMarkingEnabled(true);
@@ -146,18 +168,63 @@ function resetSeries(): void {
 }
 
 // ============================================
-// Détection automatique des sauts (à valider)
+// Détection par pose IA (pipeline MediaPipe)
 // ============================================
 
+/** Temps réels de chaque frame (index ffmpeg / facteur temps) */
+function realFrameTimes(): Float64Array | null {
+  if (!frameIndex) return null;
+  const factor = timeFactor().factor;
+  const out = new Float64Array(frameIndex.ptsTimes.length);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = frameIndex.ptsTimes[i] / factor;
+  }
+  return out;
+}
+
+/** Constructeur de VideoFrame depuis l'index ffmpeg */
+function mkFrame(frameNumber: number): VideoFrame {
+  const ptsTimes = frameIndex?.ptsTimes;
+  return {
+    frameNumber,
+    timestamp:
+      ptsTimes && frameNumber < ptsTimes.length
+        ? ptsTimes[frameNumber]
+        : frameNumber / (currentVideo?.fps || 240),
+  };
+}
+
+let poseRunning = false;
+
+function poseSetStatus(text: string | null): void {
+  if (text) {
+    el.poseStatus.textContent = text;
+    el.posePanel.style.display = 'block';
+  } else {
+    el.poseStatus.textContent = '';
+  }
+}
+
+function poseSetProgress(ratio: number | null): void {
+  if (ratio === null) {
+    el.poseProgress.style.display = 'none';
+    el.poseProgressFill.style.width = '0%';
+  } else {
+    el.poseProgress.style.display = 'block';
+    el.poseProgressFill.style.width = `${Math.round(ratio * 100)}%`;
+  }
+}
+
 /**
- * Lance la détection automatique et pré-charge le premier saut proposé.
- * L'utilisateur valide chaque saut manuellement (ajustement ±1/±10 possible).
+ * Lance la détection par pose IA : extraction + landmarks + pipeline
+ * pogoEvents, puis propose les sauts pour validation manuelle.
  */
-async function runJumpDetection(): Promise<void> {
-  if (!frameIndex || !currentVideo || !frameIndex.sceneScores) {
-    showAlert('Lancez d\'abord l\'analyse de la vidéo.', 'error');
+async function runPoseJumpDetection(): Promise<void> {
+  if (!frameIndex || !currentVideo || !currentFile || !videoPlayer) {
+    showAlert('Importez d\'abord une vidéo et attendez la fin de son analyse.', 'error');
     return;
   }
+  if (poseRunning) return;
   if (jumpMeasurements.length > 0) {
     const ok = window.confirm(
       `Relancer la détection réinitialise la série en cours ` +
@@ -165,73 +232,466 @@ async function runJumpDetection(): Promise<void> {
     );
     if (!ok) return;
   }
+  poseRunning = true;
+  el.btnAutoDetect.disabled = true;
+  poseSetProgress(0);
+  poseSetStatus('Chargement du modèle de pose (≈9 Mo, une seule fois)…');
 
-  const tf = timeFactor();
-  const frameTimes = new Float64Array(frameIndex.ptsTimes.length);
-  for (let i = 0; i < frameTimes.length; i++) {
-    frameTimes[i] = frameIndex.ptsTimes[i] / tf.factor;
-  }
+  try {
+    const frameTimes = realFrameTimes();
+    if (!frameTimes) throw new Error('Index des frames indisponible.');
 
-  const result = detectJumps({
-    sceneScores: frameIndex.sceneScores,
-    frameTimes,
-    duplication: estimatedDuplication,
-    expectedJumps: selectedJumpCount(),
-  });
-  autoCandidates = result.jumps;
+    poseData = await runPoseDetection(currentFile, frameIndex.ptsTimes, (progress) => {
+      if (progress.stage === 'model') {
+        poseSetStatus(`Chargement du modèle de pose… ${Math.round(progress.ratio * 100)} %`);
+        poseSetProgress(progress.ratio * 0.2);
+      } else {
+        poseSetStatus('Extraction des frames et détection de la pose…');
+        poseSetProgress(0.2 + progress.ratio * 0.8);
+      }
+    });
 
-  if (autoCandidates.length === 0) {
+    // Frames sans pose détectée
+    const missing = countLowVisibilityFrames(poseData);
+    if (missing > frameIndex.frameCount * 0.5) {
+      throw new Error(
+        'Pose non détectée sur la majorité des frames — vérifiez que le sujet ' +
+        'entier (pieds compris) est visible de profil.'
+      );
+    }
+
+    // Pipeline pogoEvents : lissage, ligne de sol, epsilon adaptatif,
+    // détection des croisements, reconstruction cyclique.
+    const smoothY = smooth(poseData.footY, 5);
+    const ground = estimateGroundLine(smoothY, frameTimes, 2);
+    const epsilon = adaptiveEpsilon(smoothY, ground);
+    const events = detectFootEvents(frameTimes, smoothY, ground, epsilon, {
+      visibility: poseData.visibility,
+    });
+    const { jumps, rejected } = reconstructJumps(events, frameTimes);
+    poseRejectedCycles = rejected;
+
+    poseProposals = jumps.map((jump) => ({
+      jump,
+      visibility: Math.min(
+        poseData!.visibility[jump.landingFrame] ?? 1,
+        poseData!.visibility[jump.takeoffFrame] ?? 1,
+        poseData!.visibility[jump.finalLandingFrame] ?? 1
+      ),
+      validated: false,
+      rejected: false,
+    }));
+
+    if (poseProposals.length === 0) {
+      hidePosePanel();
+      showAlert(
+        'Aucun saut détecté par la pose IA' +
+        (rejected.length > 0
+          ? ` (${rejected.length} cycle(s) rejeté(s) : ${rejected[0].reason})`
+          : '') +
+        ' — utilisez le marquage manuel.',
+        'error'
+      );
+      return;
+    }
+
+    jumpMeasurements = [];
+    currentJumpIndex = 0;
+    setMarkingEnabled(true);
+    el.btnRestartSeries.style.display = 'none';
+
+    poseSetProgress(null);
+    renderPoseJumpList();
+    loadPoseProposal(firstPendingProposal());
+
     showAlert(
-      'Aucun saut détecté automatiquement — utilisez le marquage manuel. ' +
-      '(Le protocole de filmage aide : strict profil, cadre stable, sujet seul.)',
+      `${poseProposals.length} saut(s) proposé(s) par la pose IA` +
+      (rejected.length > 0 ? `, ${rejected.length} cycle(s) rejeté(s)` : '') +
+      (missing > 0 ? `, ${missing} frame(s) à faible visibilité` : '') +
+      ' — vérifiez chaque saut puis validez.',
+      'success'
+    );
+  } catch (error) {
+    console.error('[RSI Calc] Détection pose :', error);
+    poseSetProgress(null);
+    poseSetStatus(
+      `Échec de la détection : ${error instanceof Error ? error.message : String(error)}`
+    );
+    showAlert(
+      `Détection par pose IA échouée — ${error instanceof Error ? error.message : String(error)}. ` +
+      'Le marquage manuel reste fonctionnel.',
       'error'
     );
-    return;
+  } finally {
+    poseRunning = false;
+    el.btnAutoDetect.disabled = false;
   }
+}
 
-  jumpMeasurements = [];
-  currentJumpIndex = 0;
-  setMarkingEnabled(true);
-  el.btnRestartSeries.style.display = 'none';
-  loadCandidate(0);
+/** Nombre de frames avec visibilité des pointes < 0.6 */
+function countLowVisibilityFrames(data: PoseFrameData): number {
+  let count = 0;
+  for (let i = 0; i < data.visibility.length; i++) {
+    if (data.visibility[i] < 0.6) count++;
+  }
+  return count;
+}
 
-  showAlert(
-    `${autoCandidates.length} saut(s) détecté(s) (confiance ${result.confidence}` +
-    `${autoCandidates.length !== selectedJumpCount()
-      ? `, ${selectedJumpCount()} attendus` : ''})` +
-    ` — facteur temps ×${tf.factor} (${tf.label}). ` +
-    'Saut 1 pré-chargé : vérifiez chaque marqueur (chip cliquable, frame précédente, ±1/±10) puis validez.',
-    'success'
-  );
+/** Premier saut proposé non encore traité */
+function firstPendingProposal(): number {
+  const index = poseProposals.findIndex((p) => !p.validated && !p.rejected);
+  return index >= 0 ? index : -1;
+}
+
+/** Masque le panneau de validation pose */
+function hidePosePanel(): void {
+  el.posePanel.style.display = 'none';
+  el.poseCurrent.style.display = 'none';
+  el.poseJumpList.innerHTML = '';
+  el.poseRejectedList.innerHTML = '';
+  poseSetProgress(null);
+  poseSetStatus(null);
 }
 
 /**
- * Pré-charge un saut détecté dans les marqueurs du saut courant et
- * positionne la vidéo sur l'atterrissage proposé.
+ * Charge un saut proposé dans les marqueurs du saut courant et positionne
+ * la vidéo sur l'atterrissage proposé (vue de validation hybride).
  */
-function loadCandidate(candidateIndex: number): void {
-  if (!frameIndex || candidateIndex >= autoCandidates.length) return;
-  const candidate = autoCandidates[candidateIndex];
-  if (!videoPlayer) return;
+function loadPoseProposal(proposalIndex: number): void {
+  activePoseProposal = null;
+  if (proposalIndex < 0 || proposalIndex >= poseProposals.length || !videoPlayer) {
+    // Tous les sauts proposés ont été traités
+    el.poseCurrent.style.display = 'none';
+    renderPoseJumpList();
+    const pending = firstPendingProposal();
+    if (pending < 0) {
+      poseSetStatus(
+        poseProposals.some((p) => p.rejected)
+          ? 'Tous les sauts proposés ont été traités (certains rejetés) — ' +
+            'les sauts restants peuvent être marqués manuellement.'
+          : 'Tous les sauts proposés ont été traités.'
+      );
+      setMarkingEnabled(!seriesComplete());
+    }
+    updateJumpProgress();
+    return;
+  }
 
-  const ptsTimes = frameIndex.ptsTimes;
+  const proposal = poseProposals[proposalIndex];
+  activePoseProposal = proposalIndex;
+
   markerManager.clearAllMarkers();
-  const mkFrame = (frameNumber: number): VideoFrame => ({
-    frameNumber,
-    timestamp:
-      frameNumber < ptsTimes.length
-        ? ptsTimes[frameNumber]
-        : frameNumber / (currentVideo?.fps || 240),
-  });
-  markerManager.setMarker(MARKER_TYPES.LANDING, mkFrame(candidate.landingFrame));
-  markerManager.setMarker(MARKER_TYPES.TAKEOFF, mkFrame(candidate.takeoffFrame));
-  markerManager.setMarker(MARKER_TYPES.FINAL_LANDING, mkFrame(candidate.finalLandingFrame));
+  markerManager.setMarker(MARKER_TYPES.LANDING, mkFrame(proposal.jump.landingFrame));
+  markerManager.setMarker(MARKER_TYPES.TAKEOFF, mkFrame(proposal.jump.takeoffFrame));
+  markerManager.setMarker(MARKER_TYPES.FINAL_LANDING, mkFrame(proposal.jump.finalLandingFrame));
 
-  // Positionner sur l'atterrissage proposé et mémoriser la référence
-  videoPlayer.goToFrame(candidate.landingFrame);
-  referenceFrame = candidate.landingFrame;
+  videoPlayer.goToFrame(proposal.jump.landingFrame);
+  referenceFrame = proposal.jump.landingFrame;
   el.btnReturnMarker.style.display = 'inline-flex';
+  el.poseCurrent.style.display = 'block';
+  renderPoseEventRows();
+  updatePoseLiveMetrics();
+  renderPoseJumpList();
   updateJumpProgress();
+}
+
+/** Construit les 3 lignes d'événements éditables (◀ frame ▶) */
+function renderPoseEventRows(): void {
+  const rows: Array<{ label: string; type: MarkerType; key: 'landing' | 'takeoff' | 'finalLanding' }> = [
+    { label: '1. Atterrissage (premier contact)', type: MARKER_TYPES.LANDING, key: 'landing' },
+    { label: '2. Décollage (dernier contact)', type: MARKER_TYPES.TAKEOFF, key: 'takeoff' },
+    { label: '3. Atterrissage suivant', type: MARKER_TYPES.FINAL_LANDING, key: 'finalLanding' },
+  ];
+  const container = el.poseEventRows;
+  container.innerHTML = '';
+  for (const row of rows) {
+    const div = document.createElement('div');
+    div.className = 'pose-event-row';
+
+    const label = document.createElement('span');
+    label.className = 'pe-label';
+    label.textContent = row.label;
+
+    const prev = document.createElement('button');
+    prev.className = 'btn';
+    prev.textContent = '◀';
+    prev.title = 'Frame précédente pour cet événement';
+    prev.addEventListener('click', () => adjustPoseEvent(row.type, -1));
+
+    const frameSpan = document.createElement('span');
+    frameSpan.className = 'pe-frame';
+    frameSpan.dataset.key = row.key;
+
+    const next = document.createElement('button');
+    next.className = 'btn';
+    next.textContent = '▶';
+    next.title = 'Frame suivante pour cet événement';
+    next.addEventListener('click', () => adjustPoseEvent(row.type, +1));
+
+    div.append(label, prev, frameSpan, next);
+    container.appendChild(div);
+  }
+  updatePoseEventFrames();
+}
+
+/** Affiche les numéros de frames courants dans les lignes d'événements */
+function updatePoseEventFrames(): void {
+  const markers = markerManager.getAllMarkers();
+  const keys: Array<{ key: 'landing' | 'takeoff' | 'finalLanding'; span: string }> = [
+    { key: 'landing', span: 'landing' },
+    { key: 'takeoff', span: 'takeoff' },
+    { key: 'finalLanding', span: 'finalLanding' },
+  ];
+  for (const { key, span } of keys) {
+    const node = el.poseEventRows.querySelector(`[data-key="${span}"]`);
+    if (!node) continue;
+    const m = markers[key];
+    node.textContent = m ? `frame ${m.frameNumber + 1}` : '—';
+  }
+}
+
+/** Déplace un événement du saut courant d'une frame et recentre la vidéo */
+function adjustPoseEvent(type: MarkerType, delta: number): void {
+  if (!videoPlayer || !currentVideo) return;
+  const marker = markerManager.getMarker(type);
+  if (!marker) return;
+  const newFrame = clamp(marker.frameNumber + delta, 0, currentVideo.frameCount - 1);
+  markerManager.setMarker(type, mkFrame(newFrame));
+  videoPlayer.goToFrame(newFrame);
+  referenceFrame = newFrame;
+  el.btnReturnMarker.style.display = 'inline-flex';
+  updatePoseEventFrames();
+  updatePoseLiveMetrics();
+}
+
+/**
+ * Temps réel d'un événement : temps interpolé sous-frame de la pose IA si
+ * la frame n'a pas été corrigée, sinon temps réel de la frame corrigée.
+ */
+function poseEventTime(which: 'landing' | 'takeoff' | 'finalLanding', frameNumber: number): number | null {
+  const proposal = activePoseProposal !== null ? poseProposals[activePoseProposal] : null;
+  if (proposal) {
+    const original =
+      which === 'landing' ? proposal.jump.landingFrame
+      : which === 'takeoff' ? proposal.jump.takeoffFrame
+      : proposal.jump.finalLandingFrame;
+    const interpolated =
+      which === 'landing' ? proposal.jump.landingTime
+      : which === 'takeoff' ? proposal.jump.takeoffTime
+      : proposal.jump.finalLandingTime;
+    if (frameNumber === original && Number.isFinite(interpolated)) {
+      return interpolated;
+    }
+  }
+  return realTimeOfFrame(frameNumber);
+}
+
+/** Métriques recalculées en direct pour le saut en cours de validation */
+function updatePoseLiveMetrics(): void {
+  if (!markerManager.areMarkersValid()) {
+    el.poseLiveMetrics.textContent = 'Marquez les 3 frames pour voir les métriques.';
+    el.poseVisibilityWarning.style.display = 'none';
+    return;
+  }
+  const markers = markerManager.getAllMarkers();
+  try {
+    const t1 = poseEventTime('landing', markers.landing!.frameNumber);
+    const t2 = poseEventTime('takeoff', markers.takeoff!.frameNumber);
+    const t3 = poseEventTime('finalLanding', markers.finalLanding!.frameNumber);
+    if (t1 === null || t2 === null || t3 === null) {
+      el.poseLiveMetrics.textContent = 'Temps indisponibles (index des frames manquant).';
+      return;
+    }
+    const result = formatRSIResult(calculateRSIFromTimestamps(t1, t2, t3, gravity));
+    el.poseLiveMetrics.textContent =
+      `Contact ${result.contactTimeMs} ms · vol ${result.flightTimeMs} ms · ` +
+      `h ${result.heightCm} cm · RSI ${result.rsi} m/s`;
+  } catch (error) {
+    el.poseLiveMetrics.textContent = `Erreur de calcul : ${error instanceof Error ? error.message : String(error)}`;
+  }
+
+  // Avertissement visibilité du saut proposé
+  const proposal = activePoseProposal !== null ? poseProposals[activePoseProposal] : null;
+  if (proposal && proposal.visibility < 0.6) {
+    el.poseVisibilityWarning.style.display = 'block';
+    el.poseVisibilityWarning.textContent =
+      `Visibilité des landmarks faible (${Math.round(proposal.visibility * 100)} %) — ` +
+      'vérifiez cet événement avec attention.';
+  } else {
+    el.poseVisibilityWarning.style.display = 'none';
+  }
+}
+
+/** Liste des sauts proposés (cliquer pour recharger un saut non traité) */
+function renderPoseJumpList(): void {
+  const list = el.poseJumpList;
+  list.innerHTML = '';
+  poseProposals.forEach((proposal, index) => {
+    const row = document.createElement('div');
+    row.className = 'pose-jump-row' + (index === activePoseProposal ? ' current' : '');
+
+    const name = document.createElement('span');
+    name.className = 'pj-name';
+    name.textContent = `Saut ${index + 1}`;
+
+    const details = document.createElement('span');
+    details.className = 'pj-details';
+    const j = proposal.jump;
+    const t1 = realTimeOfFrame(j.landingFrame);
+    const t2 = realTimeOfFrame(j.takeoffFrame);
+    const t3 = realTimeOfFrame(j.finalLandingFrame);
+    if (t1 !== null && t2 !== null && t3 !== null) {
+      try {
+        const r = formatRSIResult(calculateRSIFromTimestamps(t1, t2, t3, gravity));
+        details.textContent =
+          `frames ${j.landingFrame + 1}/${j.takeoffFrame + 1}/${j.finalLandingFrame + 1} · ` +
+          `RSI ${r.rsi} m/s`;
+      } catch {
+        details.textContent = `frames ${j.landingFrame + 1}/${j.takeoffFrame + 1}/${j.finalLandingFrame + 1}`;
+      }
+    } else {
+      details.textContent = `frames ${j.landingFrame + 1}/${j.takeoffFrame + 1}/${j.finalLandingFrame + 1}`;
+    }
+
+    const status = document.createElement('span');
+    status.className = 'pj-status';
+    if (proposal.validated) {
+      status.textContent = '✓ validé';
+    } else if (proposal.rejected) {
+      status.textContent = '✗ rejeté';
+    } else {
+      status.textContent = 'en attente';
+    }
+
+    row.append(name, details, status);
+    if (!proposal.validated && !proposal.rejected) {
+      row.addEventListener('click', () => loadPoseProposal(index));
+      row.title = 'Cliquer pour charger ce saut dans la validation';
+    }
+    list.appendChild(row);
+  });
+
+  // Cycles rejetés par le pipeline (diagnostic)
+  const rejectedList = el.poseRejectedList;
+  rejectedList.innerHTML = '';
+  if (poseRejectedCycles.length > 0) {
+    const title = document.createElement('p');
+    title.className = 'hint';
+    title.style.marginTop = '8px';
+    title.textContent = `Cycles rejetés automatiquement (${poseRejectedCycles.length}) :`;
+    rejectedList.appendChild(title);
+    const ul = document.createElement('ul');
+    ul.className = 'hint';
+    for (const r of poseRejectedCycles) {
+      const li = document.createElement('li');
+      li.textContent = `frames ${r.from + 1}–${r.to + 1} : ${r.reason}`;
+      ul.appendChild(li);
+    }
+    rejectedList.appendChild(ul);
+  }
+}
+
+/**
+ * Valide le saut courant quand il vient de la pose IA : temps interpolés
+ * sous-frame si la frame n'a pas été corrigée, temps réels sinon.
+ */
+function validatePoseProposal(useCurrentMarkers: boolean): boolean {
+  const index = activePoseProposal;
+  if (index === null || !poseProposals[index]) return false;
+  const proposal = poseProposals[index];
+
+  const landingFrame = useCurrentMarkers
+    ? markerManager.getMarker(MARKER_TYPES.LANDING)?.frameNumber ?? proposal.jump.landingFrame
+    : proposal.jump.landingFrame;
+  const takeoffFrame = useCurrentMarkers
+    ? markerManager.getMarker(MARKER_TYPES.TAKEOFF)?.frameNumber ?? proposal.jump.takeoffFrame
+    : proposal.jump.takeoffFrame;
+  const finalLandingFrame = useCurrentMarkers
+    ? markerManager.getMarker(MARKER_TYPES.FINAL_LANDING)?.frameNumber ?? proposal.jump.finalLandingFrame
+    : proposal.jump.finalLandingFrame;
+
+  const t1 = poseEventTime('landing', landingFrame);
+  const t2 = poseEventTime('takeoff', takeoffFrame);
+  const t3 = poseEventTime('finalLanding', finalLandingFrame);
+
+  if (t1 === null || t2 === null || t3 === null) {
+    showAlert('Temps réels indisponibles pour ce saut — vérifiez l\'analyse de la vidéo.', 'error');
+    return false;
+  }
+
+  const result = calculateRSIFromTimestamps(t1, t2, t3, gravity);
+  const interpolatedUsed =
+    landingFrame === proposal.jump.landingFrame && takeoffFrame === proposal.jump.takeoffFrame &&
+    finalLandingFrame === proposal.jump.finalLandingFrame;
+  const label = interpolatedUsed
+    ? `Pose IA, temps interpolés sous-frame (${timeFactor().label})`
+    : `Pose IA, frames vérifiées (${timeFactor().label})`;
+
+  jumpMeasurements.push({
+    formatted: formatRSIResult(result),
+    markers: {
+      landing: mkFrame(landingFrame),
+      takeoff: mkFrame(takeoffFrame),
+      finalLanding: mkFrame(finalLandingFrame),
+    },
+    times: { landing: t1, takeoff: t2, finalLanding: t3 },
+    timeSourceLabel: label,
+  });
+
+  proposal.validated = true;
+  currentJumpIndex++;
+  updateJumpProgress();
+  displayJumpResults();
+  return true;
+}
+
+/** Valide tous les sauts proposés restants (jusqu'à la fin de la série) */
+function validateAllPoseJumps(): void {
+  if (activePoseProposal === null) return;
+  let validatedCount = 0;
+  while (activePoseProposal !== null && !seriesComplete()) {
+    // Le saut courant garde les éventuelles corrections ; les suivants
+    // sont validés tels que proposés.
+    if (!validatePoseProposal(validatedCount === 0)) break;
+    validatedCount++;
+    const next = firstPendingProposal();
+    if (next < 0) {
+      activePoseProposal = null;
+      break;
+    }
+    loadPoseProposal(next);
+  }
+  if (validatedCount > 0) {
+    showAlert(`${validatedCount} saut(s) validé(s) d'un clic.`, 'success');
+  }
+  checkSeriesEnd();
+  if (activePoseProposal !== null && !seriesComplete()) {
+    showAlert(`Saut ${currentJumpIndex + 1} pré-chargé — vérifiez puis validez.`, 'info');
+  }
+}
+
+/** Rejette le saut courant : il n'entre pas dans les mesures */
+function rejectPoseProposal(): void {
+  if (activePoseProposal === null || !poseProposals[activePoseProposal]) return;
+  poseProposals[activePoseProposal].rejected = true;
+  markerManager.clearAllMarkers();
+  const next = firstPendingProposal();
+  loadPoseProposal(next);
+  showAlert('Saut rejeté — il ne sera pas mesuré.', 'info');
+}
+
+/** Fin de série : désactive le marquage et résume les N meilleurs */
+function checkSeriesEnd(): void {
+  if (!seriesComplete()) return;
+  setMarkingEnabled(false);
+  el.btnRestartSeries.style.display = 'block';
+  renderPoseJumpList();
+  const best = bestJumpStats();
+  showAlert(
+    `Série complète : ${jumpMeasurements.length} sauts — moyenne des ${best.count} meilleurs : ` +
+    `${best.mean} ± ${best.stdDev} m/s.`,
+    'success'
+  );
 }
 
 function setMarkingEnabled(enabled: boolean): void {
@@ -271,6 +731,23 @@ function validateJump(): void {
   const finalLanding = markers.finalLanding!;
 
   try {
+    // Saut proposé par la pose IA : temps interpolés sous-frame si les
+    // frames n'ont pas été corrigées, temps réels sinon.
+    if (activePoseProposal !== null) {
+      if (!validatePoseProposal(true)) return;
+      markerManager.clearAllMarkers();
+      const next = firstPendingProposal();
+      if (next >= 0 && !seriesComplete()) {
+        loadPoseProposal(next);
+        showAlert(`Saut ${currentJumpIndex + 1} pré-chargé — vérifiez puis validez.`, 'info');
+      } else {
+        activePoseProposal = null;
+        loadPoseProposal(next);
+      }
+      checkSeriesEnd();
+      return;
+    }
+
     const t1 = realTimeOfFrame(landing.frameNumber);
     const t2 = realTimeOfFrame(takeoff.frameNumber);
     const t3 = realTimeOfFrame(finalLanding.frameNumber);
@@ -312,21 +789,14 @@ function validateJump(): void {
     );
 
     if (seriesComplete()) {
-      setMarkingEnabled(false);
-      el.btnRestartSeries.style.display = 'block';
-      const best = bestJumpStats();
-      showAlert(
-        `Série complète : ${jumpMeasurements.length} sauts — moyenne des ${best.count} meilleurs : ` +
-        `${best.mean} ± ${best.stdDev} m/s.`,
-        'success'
-      );
-    } else if (autoCandidates.length > currentJumpIndex) {
-      // Détection automatique : pré-charger le saut suivant
-      loadCandidate(currentJumpIndex);
-      showAlert(
-        `Saut ${currentJumpIndex + 1} pré-chargé — vérifiez les marqueurs puis validez.`,
-        'info'
-      );
+      checkSeriesEnd();
+    } else {
+      // Proposition pose IA suivante : pré-charger le saut suivant
+      const next = firstPendingProposal();
+      if (next >= 0) {
+        loadPoseProposal(next);
+        showAlert(`Saut ${currentJumpIndex + 1} pré-chargé — vérifiez puis validez.`, 'info');
+      }
     }
   } catch (error) {
     console.error(error);
@@ -478,6 +948,20 @@ const el = {
   get btnRestartSeries() { return $<HTMLButtonElement>('btn-restart-series'); },
   get btnAutoDetect() { return $<HTMLButtonElement>('btn-auto-detect'); },
   get btnReturnMarker() { return $<HTMLButtonElement>('btn-return-marker'); },
+  get posePanel() { return $('pose-panel'); },
+  get poseStatus() { return $('pose-status'); },
+  get poseProgress() { return $('pose-progress'); },
+  get poseProgressFill() { return $('pose-progress-fill'); },
+  get poseJumpList() { return $('pose-jump-list'); },
+  get poseCurrent() { return $('pose-current'); },
+  get poseEventRows() { return $('pose-event-rows'); },
+  get poseLiveMetrics() { return $('pose-live-metrics'); },
+  get poseVisibilityWarning() { return $('pose-visibility-warning'); },
+  get poseRejectedList() { return $('pose-rejected-list'); },
+  get poseOverlay() { return $<HTMLCanvasElement>('pose-overlay'); },
+  get btnPoseValidate() { return $<HTMLButtonElement>('btn-pose-validate'); },
+  get btnPoseValidateAll() { return $<HTMLButtonElement>('btn-pose-validate-all'); },
+  get btnPoseReject() { return $<HTMLButtonElement>('btn-pose-reject'); },
 };
 
 // ============================================
@@ -595,13 +1079,16 @@ function bindEvents(): void {
     updateJumpProgress();
   });
 
-  // Détection automatique + retour au marqueur
-  el.btnAutoDetect.addEventListener('click', () => void runJumpDetection());
+  // Détection par pose IA + validation hybride
+  el.btnAutoDetect.addEventListener('click', () => void runPoseJumpDetection());
   el.btnReturnMarker.addEventListener('click', () => {
     if (referenceFrame !== null && videoPlayer) {
       videoPlayer.goToFrame(referenceFrame);
     }
   });
+  el.btnPoseValidate.addEventListener('click', () => validateJump());
+  el.btnPoseValidateAll.addEventListener('click', () => validateAllPoseJumps());
+  el.btnPoseReject.addEventListener('click', () => rejectPoseProposal());
 
   // Chips cliquables : afficher la frame d'un marqueur (et la mémoriser
   // comme référence pour le bouton « Revenir au marqueur »)
@@ -893,6 +1380,41 @@ function updateFrameUI(frame: number): void {
   const pct = `${(ratio * 100).toFixed(2)}%`;
   el.timelineFill.style.width = pct;
   el.timelineThumb.style.left = pct;
+  drawPoseOverlay(frame);
+}
+
+/**
+ * Dessine l'overlay des landmarks du pied (pose IA) sur la frame courante :
+ * vert si visibilité ≥ 0.6, orange sinon. Repère image : y vers le bas.
+ */
+function drawPoseOverlay(frame: number): void {
+  const canvas = el.poseOverlay;
+  const video = el.videoElement;
+  if (!poseData || !video.videoWidth) {
+    canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
+    return;
+  }
+  if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+  }
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (frame < 0 || frame >= poseData.points.length) return;
+  const points = poseData.points[frame];
+  if (!points || points.length === 0) return;
+
+  const radius = Math.max(4, canvas.width / 150);
+  for (const point of points) {
+    ctx.beginPath();
+    ctx.arc(point.x * canvas.width, point.y * canvas.height, radius, 0, Math.PI * 2);
+    ctx.fillStyle = point.v >= 0.6 ? 'rgba(46, 204, 113, 0.9)' : 'rgba(230, 162, 60, 0.9)';
+    ctx.fill();
+    ctx.lineWidth = 2;
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.6)';
+    ctx.stroke();
+  }
 }
 
 // ============================================
@@ -962,6 +1484,12 @@ function updateMarkerChips(): void {
     tick.style.left = `${((m.frameNumber / (currentVideo!.frameCount - 1)) * 100).toFixed(2)}%`;
     el.timeline.appendChild(tick);
   });
+
+  // Panneau pose IA : frames éditables + métriques recalculées en direct
+  if (activePoseProposal !== null) {
+    updatePoseEventFrames();
+    updatePoseLiveMetrics();
+  }
 }
 
 // ============================================
@@ -1118,8 +1646,8 @@ async function runFfmpegAnalysis(): Promise<void> {
     updateFrameUI(0);
 
     // Estimer la duplication depuis les scores (avant toute navigation) :
-    // les temps réels et la détection automatique en dépendent même si
-    // l'utilisateur n'a pas encore navigué frame par frame.
+    // les temps réels en dépendent même si l'utilisateur n'a pas encore
+    // navigué frame par frame.
     if (frameIndex.sceneScores) {
       estimatedDuplication = estimateDuplication(frameIndex.sceneScores);
       videoPlayer?.seedDuplicationHint(estimatedDuplication);
@@ -1134,21 +1662,9 @@ async function runFfmpegAnalysis(): Promise<void> {
       estimatedDuplication = 1;
     }
 
-    // Détection automatique : afficher le bouton OU un message explicite —
-    // jamais de silence sur ce qui est disponible
-    if (frameIndex.sceneScores) {
-      el.btnAutoDetect.style.display = 'block';
-    } else {
-      el.btnAutoDetect.style.display = 'none';
-      console.warn('[RSI Calc] Scores de mouvement non collectés',
-        { sceneBlocks: frameIndex.sceneScores === undefined ? 0 : 'n/a' });
-      showAlert(
-        'Détection automatique indisponible pour cette vidéo (scores de mouvement non ' +
-        'collectés — filtre non supporté ou couverture insuffisante). ' +
-        'Le marquage manuel et les calculs restent pleinement fonctionnels.',
-        'info'
-      );
-    }
+    // Détection par pose IA : disponible dès que l'index des frames est
+    // prêt (aucune dépendance aux scores de mouvement).
+    el.btnAutoDetect.style.display = 'block';
 
     const tf = timeFactor();
     const realDuration = (index.frameCount * index.medianInterval) / tf.factor;

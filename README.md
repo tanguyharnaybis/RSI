@@ -26,6 +26,34 @@
   - **RSI modifié** = hauteur / temps_total
 - Affichage des résultats en temps réel
 
+### 🤖 Détection automatique par pose IA (MediaPipe)
+- Pipeline **MediaPipe Pose** (`@mediapipe/tasks-vision`, modèle
+  `pose_landmarker_full.task` servi localement — aucun appel réseau externe) :
+  - landmarks du pied extraits frame par frame : chevilles (27/28), talons
+    (29/30), pointes (31/32) — en pogo jump, la pointe est le premier et le
+    dernier point de contact ;
+  - ligne de sol estimée par moyenne glissante des positions minimales stables
+    de la pointe pendant les appuis ;
+  - détection des croisements du seuil de sol avec epsilon adaptatif au bruit
+    mesuré, trajectoire lissée (moyenne mobile) ;
+  - **sous-frame** : régression linéaire sur 3-4 frames autour de chaque
+    événement → instant du croisement interpolé à la milliseconde ;
+  - reconstruction **cyclique** des pogo jumps : une seule timeline d'événements
+    alternés contact/vol, l'atterrissage final d'un saut est le premier contact
+    du suivant (aucun doublon) ; vol initial et contact final incomplet ignorés ;
+    cycles incohérents rejetés (contact < 80 ms ou > 400 ms, vol < 100 ms ou
+    > 600 ms, chevauchements).
+- **Validation manuelle obligatoire (hybride)** : l'IA propose, vous validez —
+  liste des sauts proposés, ajustement frame par frame (◀/▶) pour chaque
+  événement, métriques recalculées en direct, overlay des landmarks du pied sur
+  la vidéo (vert si visibilité ≥ 0.6, orange sinon), boutons « Valider ce saut »,
+  « Tout valider », « Rejeter ce saut ». Les corrections sont enregistrées avec
+  la session.
+- Extraction des frames par le moteur ffmpeg par morceaux (mémoire bornée) avec
+  `-fps_mode passthrough` : chaque frame décodée sort exactement une fois, et
+  validation stricte du nombre de frames extraites.
+
+
 ### 📊 Gestion des Sessions
 - Création de sessions avec nom et hauteur de drop
 - Sauvegarde locale de plusieurs essais par session

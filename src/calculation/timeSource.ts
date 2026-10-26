@@ -88,3 +88,80 @@ export function determineTimeFactor(
       ' : cadence de capture absente du fichier',
   };
 }
+
+// ---------------------------------------------------------------------------
+// Estimation de duplication depuis les scores de mouvement
+// ---------------------------------------------------------------------------
+
+/**
+ * Seuil d'Otsu : sépare les scores en deux classes (calme / mouvement)
+ * en maximisant la variance inter-classes.
+ */
+export function otsuThreshold(sorted: Float64Array): number {
+  const n = sorted.length;
+  if (n === 0) return 0;
+  const min = sorted[0];
+  const max = sorted[n - 1];
+  if (max <= min) return min;
+
+  const bins = 256;
+  const histogram = new Array<number>(bins).fill(0);
+  for (const value of sorted) {
+    const bin = Math.min(bins - 1, Math.floor(((value - min) / (max - min)) * bins));
+    histogram[bin]++;
+  }
+
+  let sumAll = 0;
+  for (let i = 0; i < bins; i++) sumAll += i * histogram[i];
+
+  let sumB = 0;
+  let weightB = 0;
+  let bestBin = 0;
+  let bestVariance = -1;
+  for (let i = 0; i < bins; i++) {
+    weightB += histogram[i];
+    if (weightB === 0) continue;
+    const weightF = n - weightB;
+    if (weightF === 0) break;
+    sumB += i * histogram[i];
+    const meanB = sumB / weightB;
+    const meanF = (sumAll - sumB) / weightF;
+    const between = weightB * weightF * (meanB - meanF) ** 2;
+    if (between > bestVariance) {
+      bestVariance = between;
+      bestBin = i;
+    }
+  }
+  return min + ((bestBin + 0.5) / bins) * (max - min);
+}
+
+/**
+ * Estime le facteur de duplication (frames identiques consécutives)
+ * depuis les scores de mouvement. Dans un fichier où chaque frame est
+ * dupliquée ×N, seules les frames uniques montrent du mouvement : les
+ * frames actives (score élevé) apparaissent tous les N samples. La
+ * médiane des écarts entre frames actives donne N.
+ */
+export function estimateDuplication(sceneScores: Float64Array): number {
+  if (sceneScores.length < 16) return 1;
+
+  const sorted = Float64Array.from(sceneScores).sort();
+  const threshold = otsuThreshold(sorted);
+
+  const activeIndices: number[] = [];
+  for (let i = 0; i < sceneScores.length; i++) {
+    if (sceneScores[i] > threshold) activeIndices.push(i);
+  }
+  if (activeIndices.length < 4) return 1;
+
+  const gaps: number[] = [];
+  for (let i = 1; i < activeIndices.length; i++) {
+    const gap = activeIndices[i] - activeIndices[i - 1];
+    if (gap >= 1) gaps.push(gap);
+  }
+  if (gaps.length === 0) return 1;
+
+  gaps.sort((a, b) => a - b);
+  const medianGap = gaps[Math.floor(gaps.length / 2)];
+  return Math.min(32, Math.max(1, medianGap));
+}
