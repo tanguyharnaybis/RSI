@@ -1,6 +1,6 @@
 {
   "name": "rsi-calc",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "PWA mobile-first pour calculer le Reactive Strength Index à partir de vidéos de drop jump",
   "type": "module",
   "scripts": {

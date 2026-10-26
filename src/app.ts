@@ -390,6 +390,7 @@ function loadPoseProposal(proposalIndex: number): void {
   el.btnReturnMarker.style.display = 'inline-flex';
   el.poseCurrent.style.display = 'block';
   renderPoseEventRows();
+  updatePoseCycleWarning();
   updatePoseLiveMetrics();
   renderPoseJumpList();
   updateJumpProgress();
@@ -564,6 +565,20 @@ function goToPoseEvent(direction: 1 | -1): void {
   videoPlayer.goToFrame(target);
 }
 
+/** Affiche/masque l'avertissement de cycle hors bornes du saut courant */
+function updatePoseCycleWarning(): void {
+  const proposal = activePoseProposal !== null ? poseProposals[activePoseProposal] : null;
+  const warning = proposal?.jump.warning ?? null;
+  if (warning) {
+    el.poseCycleWarning.style.display = 'block';
+    el.poseCycleWarning.textContent =
+      `⚠ Cycle hors bornes : ${warning} — vérifiez les 3 frames ` +
+      '(un événement a pu être mal détecté) puis validez ou rejetez ce saut.';
+  } else {
+    el.poseCycleWarning.style.display = 'none';
+  }
+}
+
 /** Liste des sauts proposés (cliquer pour recharger un saut non traité) */
 function renderPoseJumpList(): void {
   const list = el.poseJumpList;
@@ -601,6 +616,9 @@ function renderPoseJumpList(): void {
       status.textContent = '✓ validé';
     } else if (proposal.rejected) {
       status.textContent = '✗ rejeté';
+    } else if (proposal.jump.warning) {
+      status.textContent = '⚠ à vérifier';
+      status.title = proposal.jump.warning;
     } else {
       status.textContent = 'en attente';
     }
@@ -669,6 +687,17 @@ function validatePoseProposal(useCurrentMarkers: boolean): boolean {
     ? `Pose IA, temps interpolés sous-frame (${timeFactor().label})`
     : `Pose IA, frames vérifiées (${timeFactor().label})`;
 
+  // Contact partagé : si l'atterrissage suivant (événement 3) a été corrigé,
+  // propager la correction au saut suivant — c'est aussi son premier contact.
+  if (finalLandingFrame !== proposal.jump.finalLandingFrame) {
+    const next = poseProposals[index + 1];
+    if (next && !next.validated && !next.rejected &&
+        next.jump.landingFrame === proposal.jump.finalLandingFrame) {
+      next.jump.landingFrame = finalLandingFrame;
+      next.jump.landingTime = realTimeOfFrame(finalLandingFrame) ?? next.jump.landingTime;
+    }
+  }
+
   jumpMeasurements.push({
     formatted: formatRSIResult(result),
     markers: {
@@ -692,6 +721,16 @@ function validateAllPoseJumps(): void {
   if (activePoseProposal === null) return;
   let validatedCount = 0;
   while (activePoseProposal !== null && !seriesComplete()) {
+    const current = poseProposals[activePoseProposal];
+    // Cycle suspect (hors bornes) : arrêt pour vérification manuelle
+    if (current.jump.warning) {
+      showAlert(
+        `Arrêt au saut ${activePoseProposal + 1} — ${current.jump.warning}. ` +
+        'Vérifiez ses 3 frames puis validez ou rejetez ce saut.',
+        'info'
+      );
+      break;
+    }
     // Le saut courant garde les éventuelles corrections ; les suivants
     // sont validés tels que proposés.
     if (!validatePoseProposal(validatedCount === 0)) break;
@@ -707,9 +746,6 @@ function validateAllPoseJumps(): void {
     showAlert(`${validatedCount} saut(s) validé(s) d'un clic.`, 'success');
   }
   checkSeriesEnd();
-  if (activePoseProposal !== null && !seriesComplete()) {
-    showAlert(`Saut ${currentJumpIndex + 1} pré-chargé — vérifiez puis validez.`, 'info');
-  }
 }
 
 /** Rejette le saut courant : il n'entre pas dans les mesures */
@@ -998,6 +1034,7 @@ const el = {
   get poseCurrent() { return $('pose-current'); },
   get poseEventRows() { return $('pose-event-rows'); },
   get poseLiveMetrics() { return $('pose-live-metrics'); },
+  get poseCycleWarning() { return $('pose-cycle-warning'); },
   get poseVisibilityWarning() { return $('pose-visibility-warning'); },
   get poseRejectedList() { return $('pose-rejected-list'); },
   get poseOverlay() { return $<HTMLCanvasElement>('pose-overlay'); },

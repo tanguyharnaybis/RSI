@@ -278,6 +278,13 @@ export interface PogoJump {
   /** Premier contact suivant : atterrissage final = début du contact suivant */
   finalLandingFrame: number;
   finalLandingTime: number;
+  /**
+   * Avertissement si le cycle sort des bornes du protocole (null = conforme).
+   * Un cycle hors bornes reste PROPOSÉ : le supprimer automatiquement
+   * casserait le partage des contacts entre sauts successifs et décalerait
+   * toute la suite — la décision appartient à l'utilisateur.
+   */
+  warning: string | null;
 }
 
 export interface RejectedJump {
@@ -302,8 +309,13 @@ export interface ReconstructOptions {
  * Règles :
  *  - le vol initial (avant le premier contact) est ignoré ;
  *  - le contact final non suivi d'un vol complet est ignoré ;
- *  - cycles incohérents rejetés : contact < 80 ms ou > 400 ms,
- *    vol < 100 ms ou > 600 ms, événements désordonnés/chevauchants.
+ *  - les cycles HORS BORNES (contact < 80 ms ou > 400 ms, vol < 100 ms
+ *    ou > 600 ms) restent PROPOSÉS avec un avertissement : rejeter
+ *    automatiquement casserait le partage des contacts (le saut suivant
+ *    commencerait au contact d'après) et décalerait toute la suite.
+ *    C'est l'utilisateur qui valide ou rejette ;
+ *  - sont réellement rejetés : événements désordonnés/chevauchants
+ *    (temps négatif) et temps indisponibles.
  *
  * @param events Événements triés par temps (frames)
  * @param frameTimes Temps réel de chaque frame (s)
@@ -389,22 +401,17 @@ export function reconstructJumps(
     if (flightMs < minFlightMs) reasons.push(`vol ${flightMs.toFixed(0)} ms < ${minFlightMs} ms`);
     if (flightMs > maxFlightMs) reasons.push(`vol ${flightMs.toFixed(0)} ms > ${maxFlightMs} ms`);
 
-    if (reasons.length > 0) {
-      rejected.push({
-        from: first.frame,
-        to: nextFirst.frame,
-        reason: `Cycle incohérent : ${reasons.join(', ')}`,
-      });
-    } else {
-      jumps.push({
-        landingFrame: first.frame,
-        landingTime: t1,
-        takeoffFrame: last.frame,
-        takeoffTime: t2,
-        finalLandingFrame: nextFirst.frame,
-        finalLandingTime: t3,
-      });
-    }
+    // Cycle hors bornes : PROPOSÉ avec avertissement (jamais supprimé
+    // automatiquement) pour préserver le partage des contacts.
+    jumps.push({
+      landingFrame: first.frame,
+      landingTime: t1,
+      takeoffFrame: last.frame,
+      takeoffTime: t2,
+      finalLandingFrame: nextFirst.frame,
+      finalLandingTime: t3,
+      warning: reasons.length > 0 ? reasons.join(', ') : null,
+    });
     // CYCLIQUE : le « first-contact » suivant ouvre déjà le saut suivant
     i += 2;
   }

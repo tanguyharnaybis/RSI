@@ -168,7 +168,7 @@ describe('reconstructJumps (événements synthétiques, cas limites)', () => {
   const mkEvents = (specs: Array<[FootEventType, number, number | null]>): FootEvent[] =>
     specs.map(([type, frame, time]) => ({ type, frame, time, visibility: 0.9 }));
 
-  it('rejette un contact trop court (< 80 ms)', () => {
+  it('signale (mais propose) un contact trop court (< 80 ms)', () => {
     const events = mkEvents([
       ['first-contact', 100, frameTime(100)],
       ['last-contact', 110, frameTime(110)], // ~42 ms de contact
@@ -176,12 +176,14 @@ describe('reconstructJumps (événements synthétiques, cas limites)', () => {
     ]);
     const times = Float64Array.from({ length: 400 }, (_, i) => frameTime(i));
     const { jumps, rejected } = reconstructJumps(events, times);
-    expect(jumps).toHaveLength(0);
-    expect(rejected).toHaveLength(1);
-    expect(rejected[0].reason).toContain('contact');
+    // Le cycle reste proposé (avec avertissement) : le supprimer
+    // casserait le partage des contacts entre sauts successifs.
+    expect(jumps).toHaveLength(1);
+    expect(rejected).toHaveLength(0);
+    expect(jumps[0].warning).toContain('contact');
   });
 
-  it('rejette un contact trop long (> 400 ms)', () => {
+  it('signale (mais propose) un contact trop long (> 400 ms)', () => {
     const events = mkEvents([
       ['first-contact', 100, frameTime(100)],
       ['last-contact', 250, frameTime(250)], // 625 ms de contact
@@ -189,25 +191,56 @@ describe('reconstructJumps (événements synthétiques, cas limites)', () => {
     ]);
     const times = Float64Array.from({ length: 500 }, (_, i) => frameTime(i));
     const { jumps, rejected } = reconstructJumps(events, times);
-    expect(jumps).toHaveLength(0);
-    expect(rejected[0].reason).toContain('> 400');
+    expect(jumps).toHaveLength(1);
+    expect(rejected).toHaveLength(0);
+    expect(jumps[0].warning).toContain('> 400');
   });
 
-  it('rejette un vol trop court (< 100 ms) et trop long (> 600 ms)', () => {
+  it('signale (mais propose) un vol trop court (< 100 ms) et trop long (> 600 ms)', () => {
     const times = Float64Array.from({ length: 600 }, (_, i) => frameTime(i));
     const tooShort = mkEvents([
       ['first-contact', 100, frameTime(100)],
       ['last-contact', 130, frameTime(130)],
       ['first-contact', 140, frameTime(140)], // vol ~42 ms
     ]);
-    expect(reconstructJumps(tooShort, times).jumps).toHaveLength(0);
+    const short = reconstructJumps(tooShort, times);
+    expect(short.jumps).toHaveLength(1);
+    expect(short.jumps[0].warning).toContain('vol');
 
     const tooLong = mkEvents([
       ['first-contact', 100, frameTime(100)],
       ['last-contact', 130, frameTime(130)],
       ['first-contact', 400, frameTime(400)], // vol ~1125 ms
     ]);
-    expect(reconstructJumps(tooLong, times).jumps).toHaveLength(0);
+    const long = reconstructJumps(tooLong, times);
+    expect(long.jumps).toHaveLength(1);
+    expect(long.jumps[0].warning).toContain('vol');
+  });
+
+  it('préserve le partage des contacts même avec un cycle hors bornes au milieu', () => {
+    // Saut 1 conforme, saut 2 hors bornes (contact trop court), saut 3 conforme :
+    // les trois sauts sont proposés et les contacts restent partagés.
+    const events = mkEvents([
+      ['first-contact', 100, frameTime(100)],
+      ['last-contact', 130, frameTime(130)],  // saut 1 : contact 125 ms ✓
+      ['first-contact', 214, frameTime(214)], // vol 350 ms ✓
+      ['last-contact', 220, frameTime(220)],  // saut 2 : contact 25 ms ⚠
+      ['first-contact', 304, frameTime(304)], // vol 350 ms ✓
+      ['last-contact', 334, frameTime(334)],  // saut 3 : contact 125 ms ✓
+      ['first-contact', 418, frameTime(418)], // vol 350 ms ✓
+    ]);
+    const times = Float64Array.from({ length: 500 }, (_, i) => frameTime(i));
+    const { jumps, rejected } = reconstructJumps(events, times);
+    expect(rejected).toHaveLength(0);
+    expect(jumps).toHaveLength(3);
+    expect(jumps[0].warning).toBeNull();
+    expect(jumps[1].warning).toContain('contact');
+    expect(jumps[2].warning).toBeNull();
+    // Invariant clé : l'atterrissage final du saut k EST l'atterrissage du
+    // saut k+1, même quand un cycle intermédiaire est hors bornes.
+    for (let k = 1; k < jumps.length; k++) {
+      expect(jumps[k].landingFrame).toBe(jumps[k - 1].finalLandingFrame);
+    }
   });
 
   it('rejette les événements chevauchants (temps négatif)', () => {

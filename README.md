@@ -41,8 +41,10 @@
   - reconstruction **cyclique** des pogo jumps : une seule timeline d'événements
     alternés contact/vol, l'atterrissage final d'un saut est le premier contact
     du suivant (aucun doublon) ; vol initial et contact final incomplet ignorés ;
-    cycles incohérents rejetés (contact < 80 ms ou > 400 ms, vol < 100 ms ou
-    > 600 ms, chevauchements).
+    cycles hors bornes (contact < 80 ms ou > 400 ms, vol < 100 ms ou > 600 ms)
+    **proposés avec un avertissement** — jamais supprimés automatiquement, pour
+    préserver le partage des contacts entre sauts successifs ; seuls les
+    chevauchements et événements désordonnés sont rejetés.
 - **Validation manuelle obligatoire (hybride)** : l'IA propose, vous validez —
   liste des sauts proposés, ajustement frame par frame (◀/▶) pour chaque
   événement, métriques recalculées en direct, overlay des landmarks du pied sur
