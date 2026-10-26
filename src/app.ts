@@ -1134,9 +1134,21 @@ async function runFfmpegAnalysis(): Promise<void> {
       estimatedDuplication = 1;
     }
 
-    // Détection automatique disponible si les scores de mouvement ont été
-    // collectés pendant le décodage
-    el.btnAutoDetect.style.display = frameIndex.sceneScores ? 'block' : 'none';
+    // Détection automatique : afficher le bouton OU un message explicite —
+    // jamais de silence sur ce qui est disponible
+    if (frameIndex.sceneScores) {
+      el.btnAutoDetect.style.display = 'block';
+    } else {
+      el.btnAutoDetect.style.display = 'none';
+      console.warn('[RSI Calc] Scores de mouvement non collectés',
+        { sceneBlocks: frameIndex.sceneScores === undefined ? 0 : 'n/a' });
+      showAlert(
+        'Détection automatique indisponible pour cette vidéo (scores de mouvement non ' +
+        'collectés — filtre non supporté ou couverture insuffisante). ' +
+        'Le marquage manuel et les calculs restent pleinement fonctionnels.',
+        'info'
+      );
+    }
 
     const tf = timeFactor();
     const realDuration = (index.frameCount * index.medianInterval) / tf.factor;

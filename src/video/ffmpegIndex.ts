@@ -220,6 +220,29 @@ export function parseShowinfoLine(
   };
 }
 
+/**
+ * Extrait une entrée du log du filtre metadata (scores de mouvement).
+ * Le filtre select pose la clé « lavfi.scene_score » (et non
+ * « lavfi.scene ») : les deux formes sont acceptées.
+ * Fonction pure — testée unitairement.
+ */
+export type SceneLogEntry =
+  | { kind: 'block'; ptsTime: number }
+  | { kind: 'score'; scene: number };
+
+export function parseSceneLogLine(message: string): SceneLogEntry | null {
+  if (!message.includes('Parsed_metadata')) return null;
+  const blockMatch = /frame:\s*\d+\s+pts:\s*-?\d+\s+pts_time:\s*(-?[\d.eE+-]+)/.exec(message);
+  if (blockMatch) {
+    return { kind: 'block', ptsTime: parseFloat(blockMatch[1]) };
+  }
+  const scoreMatch = /lavfi\.scene(?:_score)?=([\d.eE+-]+)/.exec(message);
+  if (scoreMatch) {
+    return { kind: 'score', scene: parseFloat(scoreMatch[1]) };
+  }
+  return null;
+}
+
 /** Médiane d'un tableau de nombres */
 function median(values: number[]): number {
   if (values.length === 0) return 0;
@@ -274,16 +297,13 @@ export async function analyzeVideoFrames(
       entries.push(parsed);
       return;
     }
-    // Filtre metadata=print : bloc frame/pts/pts_time puis clés lavfi.*
-    if (message.includes('Parsed_metadata')) {
-      const blockMatch = /frame:\s*\d+\s+pts:\s*-?\d+\s+pts_time:\s*(-?[\d.eE+-]+)/.exec(message);
-      if (blockMatch) {
-        lastMetadataPtsTime = parseFloat(blockMatch[1]);
-        return;
-      }
-      const sceneMatch = /lavfi\.scene=([\d.eE+-]+)/.exec(message);
-      if (sceneMatch && Number.isFinite(lastMetadataPtsTime)) {
-        sceneBlocks.push({ ptsTime: lastMetadataPtsTime, scene: parseFloat(sceneMatch[1]) });
+    // Filtre metadata : blocs frame/pts_time puis scores de mouvement
+    const sceneEntry = parseSceneLogLine(message);
+    if (sceneEntry) {
+      if (sceneEntry.kind === 'block') {
+        lastMetadataPtsTime = sceneEntry.ptsTime;
+      } else if (Number.isFinite(lastMetadataPtsTime)) {
+        sceneBlocks.push({ ptsTime: lastMetadataPtsTime, scene: sceneEntry.scene });
       }
       return;
     }
