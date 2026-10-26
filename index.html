@@ -488,12 +488,16 @@
 
         <!-- Détection pose IA + validation des sauts (sous la vidéo) -->
         <button id="btn-auto-detect" class="btn btn-block" style="display:none; margin-top:12px">Détecter les sauts (IA de pose)</button>
+        <div id="pose-start-group" style="display:none; margin-top:6px; align-items:center; gap:8px; flex-wrap:wrap">
+          <button id="btn-pose-mark-start" class="btn btn-sm">Définir le contact de départ (frame courante)</button>
+          <button id="btn-pose-clear-start" class="btn btn-sm" style="display:none">Effacer</button>
+          <span id="pose-start-info" class="hint"></span>
+        </div>
         <div id="pose-panel" style="display:none; margin-top:8px">
           <div id="pose-status" class="hint" aria-live="polite"></div>
           <div id="pose-progress" style="display:none; margin-top:6px; height:8px; background:var(--bg-secondary); border-radius:999px; overflow:hidden">
             <div id="pose-progress-fill" style="height:100%; width:0%; background:var(--primary); transition:width 0.2s ease"></div>
           </div>
-          <div id="pose-jump-list"></div>
           <div id="pose-current" style="display:none">
             <div class="button-grid" style="margin-bottom:8px">
               <button id="btn-pose-prev-event" class="btn" title="Aller à l'événement détecté précédent">◀ Événement précédent</button>
@@ -510,6 +514,7 @@
             </div>
             <button id="btn-pose-validate-all" class="btn btn-block" style="margin-top:8px">Tout valider</button>
           </div>
+          <div id="pose-jump-list"></div>
           <div id="pose-rejected-list"></div>
         </div>
 

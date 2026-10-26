@@ -71,6 +71,8 @@ let poseRejectedCycles: RejectedJump[] = [];
 let poseData: PoseFrameData | null = null;
 /** Index du saut proposé actuellement chargé dans les marqueurs */
 let activePoseProposal: number | null = null;
+/** Contact de départ facultatif : frame du premier contact du premier saut */
+let poseStartFrame: number | null = null;
 /** Frame du marqueur consulté (retour rapide après vérification) */
 let referenceFrame: number | null = null;
 /**
@@ -196,6 +198,34 @@ function mkFrame(frameNumber: number): VideoFrame {
 
 let poseRunning = false;
 
+/**
+ * Définit le contact de départ : la frame courante de la vidéo devient la
+ * base du premier saut — la détection ignorera tout ce qui précède.
+ */
+function setPoseStart(): void {
+  if (!videoPlayer || !currentVideo) {
+    showAlert('Importez d\'abord une vidéo.', 'error');
+    return;
+  }
+  poseStartFrame = videoPlayer.getCurrentFrame();
+  el.poseStartInfo.textContent =
+    `Détection à venir : elle partira du frame ${poseStartFrame + 1} ` +
+    '(premier contact du premier saut).';
+  el.btnPoseClearStart.style.display = 'inline-flex';
+  showAlert(
+    `Contact de départ défini au frame ${poseStartFrame + 1} — ` +
+    'navigatez jusqu\'au premier contact du premier saut puis relancez la détection IA.',
+    'success'
+  );
+}
+
+/** Efface le contact de départ (détection sur toute la vidéo) */
+function clearPoseStart(): void {
+  poseStartFrame = null;
+  el.poseStartInfo.textContent = '';
+  el.btnPoseClearStart.style.display = 'none';
+}
+
 function poseSetStatus(text: string | null): void {
   if (text) {
     el.poseStatus.textContent = text;
@@ -265,9 +295,13 @@ async function runPoseJumpDetection(): Promise<void> {
     const smoothY = smooth(poseData.footY, 5);
     const ground = estimateGroundLine(smoothY, frameTimes, 2);
     const epsilon = adaptiveEpsilon(smoothY, ground);
-    const events = detectFootEvents(frameTimes, smoothY, ground, epsilon, {
+    let events = detectFootEvents(frameTimes, smoothY, ground, epsilon, {
       visibility: poseData.visibility,
     });
+    // Contact de départ marqué : ignorer tout ce qui précède ce frame
+    if (poseStartFrame !== null) {
+      events = events.filter((event) => event.frame >= poseStartFrame!);
+    }
     const { jumps, rejected } = reconstructJumps(events, frameTimes);
     poseRejectedCycles = rejected;
 
@@ -306,6 +340,7 @@ async function runPoseJumpDetection(): Promise<void> {
 
     showAlert(
       `${poseProposals.length} saut(s) proposé(s) par la pose IA` +
+      (poseStartFrame !== null ? `, à partir du frame ${poseStartFrame + 1}` : '') +
       (rejected.length > 0 ? `, ${rejected.length} cycle(s) rejeté(s)` : '') +
       (missing > 0 ? `, ${missing} frame(s) à faible visibilité` : '') +
       ' — vérifiez chaque saut puis validez.',
@@ -1043,6 +1078,10 @@ const el = {
   get btnPoseReject() { return $<HTMLButtonElement>('btn-pose-reject'); },
   get btnPosePrevEvent() { return $<HTMLButtonElement>('btn-pose-prev-event'); },
   get btnPoseNextEvent() { return $<HTMLButtonElement>('btn-pose-next-event'); },
+  get poseStartGroup() { return $('pose-start-group'); },
+  get btnPoseMarkStart() { return $<HTMLButtonElement>('btn-pose-mark-start'); },
+  get btnPoseClearStart() { return $<HTMLButtonElement>('btn-pose-clear-start'); },
+  get poseStartInfo() { return $('pose-start-info'); },
 };
 
 // ============================================
@@ -1172,6 +1211,8 @@ function bindEvents(): void {
   el.btnPoseReject.addEventListener('click', () => rejectPoseProposal());
   el.btnPosePrevEvent.addEventListener('click', () => goToPoseEvent(-1));
   el.btnPoseNextEvent.addEventListener('click', () => goToPoseEvent(+1));
+  el.btnPoseMarkStart.addEventListener('click', () => setPoseStart());
+  el.btnPoseClearStart.addEventListener('click', () => clearPoseStart());
 
   // Chips cliquables : afficher la frame d'un marqueur (et la mémoriser
   // comme référence pour le bouton « Revenir au marqueur »)
@@ -1363,6 +1404,8 @@ async function handleVideoUpload(file: File): Promise<void> {
   el.videoInfo.textContent = 'Analyse des frames par le moteur ffmpeg…';
 
   el.btnAutoDetect.style.display = 'none';
+  el.poseStartGroup.style.display = 'none';
+  clearPoseStart();
   el.btnReturnMarker.style.display = 'none';
   referenceFrame = null;
   void runFfmpegAnalysis();
@@ -1748,6 +1791,7 @@ async function runFfmpegAnalysis(): Promise<void> {
     // Détection par pose IA : disponible dès que l'index des frames est
     // prêt (aucune dépendance aux scores de mouvement).
     el.btnAutoDetect.style.display = 'block';
+    el.poseStartGroup.style.display = 'flex';
 
     const tf = timeFactor();
     const realDuration = (index.frameCount * index.medianInterval) / tf.factor;
