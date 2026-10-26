@@ -7,6 +7,8 @@
 import Chart from 'chart.js/auto';
 import type { Session, Trial, VideoMetadata, VideoFrame, MarkerPoints } from './types';
 import { calculateRSI, calculateRSIFromTimestamps, formatRSIResult } from './calculation';
+import { determineTimeFactor } from './calculation/timeSource';
+import type { TimeFactor } from './calculation/timeSource';
 import { FrameByFramePlayer } from './video/player';
 import { extractVideoMetadata, validateVideoFile, formatDuration } from './video/loader';
 import { analyzeVideoFrames, disposeFFmpegEngine, getFFmpegEngine, isFFmpegEngineReady } from './video/ffmpegIndex';
@@ -425,14 +427,15 @@ function updateVideoInfo(): void {
     el.videoInfo.textContent = 'Analyse des frames en cours…';
     return;
   }
-  const k = temporalFactor();
-  // Durée réelle de la scène = durée vidéo / facteur total
-  const realDuration = (currentVideo.frameCount * frameIndex.medianInterval) / k;
+  const tf = timeFactor();
+  // Durée réelle de la scène = durée vidéo / facteur
+  const realDuration = (currentVideo.frameCount * frameIndex.medianInterval) / tf.factor;
+  const sourceMark = tf.source === 'timestamps' ? '✓' : '⚠';
   el.videoInfo.textContent =
     `${currentVideo.width}×${currentVideo.height} · ${formatDuration(currentVideo.duration)} · ` +
     `${currentVideo.frameCount} frames (timestamps exacts) · lecture ${Math.round(currentVideo.playbackFps)} fps` +
-    (k > 1 ? ` · facteur ×${k}` : ` · ${currentVideo.fps} fps`) +
-    ` · temps réel ≈ ${realDuration.toFixed(1)} s`;
+    (tf.factor > 1 ? ` · facteur ×${tf.factor}` : '') +
+    ` · temps réel ≈ ${realDuration.toFixed(1)} s — ${sourceMark} ${tf.label}`;
 }
 
 function updateFrameUI(frame: number): void {
@@ -600,14 +603,15 @@ function ffmpegSetProgress(ratio: number | null): void {
  * vidéo est à la cadence de capture (fichiers iPhone originaux) ; k > 1
  * pour un export étiré (durée ×k). Temps réel = temps vidéo / k.
  */
-function temporalFactor(): number {
-  if (!frameIndex || !currentVideo) return 1;
-  // Facteur total = étirement de la timeline (intervalle vidéo médian ×
-  // fps de capture) × duplication confirmée (frames identiques consécutives).
-  // Couvre les trois structures d'export : cadence de capture (×1),
-  // export étiré (×k), export avec frames dupliquées (×k).
-  const stretch = Math.max(1, Math.round(frameIndex.medianInterval * currentVideo.fps));
-  return stretch * getDuplicationFactor();
+/**
+ * Facteur temps réel et SOURCE des données (timestamps exacts ou FPS saisi).
+ * Utilisé pour la conversion temps vidéo → temps réel, et affiché partout
+ * pour que l'utilisateur sache toujours quelle donnée fonde les calculs.
+ */
+function timeFactor(): TimeFactor {
+  const containerFps =
+    frameIndex && frameIndex.medianInterval > 0 ? 1 / frameIndex.medianInterval : 0;
+  return determineTimeFactor(containerFps, getDuplicationFactor(), currentVideo?.fps ?? 240);
 }
 
 /** Temps réel d'une frame depuis l'index ffmpeg (VFR-exact) */
@@ -615,7 +619,7 @@ function realTimeOfFrame(frameNumber: number): number | null {
   if (!frameIndex || frameNumber < 0 || frameNumber >= frameIndex.ptsTimes.length) {
     return null;
   }
-  return frameIndex.ptsTimes[frameNumber] / temporalFactor();
+  return frameIndex.ptsTimes[frameNumber] / timeFactor().factor;
 }
 
 async function runFfmpegAnalysis(): Promise<void> {
@@ -663,12 +667,13 @@ async function runFfmpegAnalysis(): Promise<void> {
     updateVideoInfo();
     updateFrameUI(0);
 
-    const k = temporalFactor();
-    const realDuration = (index.frameCount * index.medianInterval) / k;
+    const tf = timeFactor();
+    const realDuration = (index.frameCount * index.medianInterval) / tf.factor;
     showAlert(
       `Vidéo analysée : ${index.frameCount} frames réelles (timestamps exacts)` +
-      (k > 1 ? `, facteur ×${k}` : '') +
-      ` — temps réel ≈ ${realDuration.toFixed(1)} s.`,
+      (tf.factor > 1 ? `, facteur ×${tf.factor}` : '') +
+      ` — temps réel ≈ ${realDuration.toFixed(1)} s.` +
+      ` Temps réels : ${tf.label}.`,
       'success'
     );
   } catch (error) {
@@ -701,9 +706,9 @@ function calculateRSIFromMarkers(): void {
   const finalLanding = markers.finalLanding!;
 
   try {
-    // Priorité à la méthode VFR-exact : temps réels issus de l'index
-    // ffmpeg (différence de timestamps — correcte même si la cadence
-    // varie au fil de la vidéo).
+    // Temps réels issus de l'index ffmpeg (différence de timestamps,
+    // VFR-exacte) ; la source du facteur (timestamps ou FPS saisi) est
+    // déterminée par timeFactor() et affichée.
     const t1 = realTimeOfFrame(landing.frameNumber);
     const t2 = realTimeOfFrame(takeoff.frameNumber);
     const t3 = realTimeOfFrame(finalLanding.frameNumber);
@@ -712,7 +717,7 @@ function calculateRSIFromMarkers(): void {
     let method: string;
     if (t1 !== null && t2 !== null && t3 !== null) {
       result = calculateRSIFromTimestamps(t1, t2, t3, gravity);
-      method = 'timestamps exacts (ffmpeg, VFR)';
+      method = timeFactor().label;
     } else {
       // Sans index : cadence supposée constante (fps × duplication)
       const effectiveFps = currentVideo.fps * getDuplicationFactor();
@@ -723,11 +728,11 @@ function calculateRSIFromMarkers(): void {
         effectiveFps,
         gravity
       );
-      method = 'cadence constante supposée';
+      method = `FPS d'enregistrement saisi (${currentVideo.fps}) — cadence constante supposée`;
     }
     const formatted = formatRSIResult(result);
-    displayResults(formatted);
-    showAlert(`RSI calculé (${method}).`, 'success');
+    displayResults(formatted, method);
+    showAlert(`RSI calculé — source des temps : ${method}.`, 'success');
   } catch (error) {
     console.error(error);
     showAlert(`Erreur de calcul : ${error instanceof Error ? error.message : String(error)}`, 'error');
@@ -740,7 +745,7 @@ function displayResults(formatted: {
   heightCm: number;
   rsi: number;
   modifiedRsi: number;
-}): void {
+}, timeSourceLabel: string): void {
   const items = [
     { label: 'Temps de contact', value: formatted.contactTimeMs, unit: 'ms' },
     { label: 'Temps de vol', value: formatted.flightTimeMs, unit: 'ms' },
@@ -768,6 +773,14 @@ function displayResults(formatted: {
     grid.appendChild(box);
   }
   el.resultsContent.appendChild(grid);
+
+  // Source des temps toujours affichée avec les résultats
+  const source = document.createElement('p');
+  source.className = 'hint';
+  source.style.marginTop = '10px';
+  source.textContent = `Source des temps : ${timeSourceLabel}`;
+  el.resultsContent.appendChild(source);
+
   updateSessionStatsDisplay();
 }
 
@@ -825,7 +838,8 @@ async function saveCurrentTrial(): Promise<void> {
       },
       { landing: t1, takeoff: t2, finalLanding: t3 },
       currentVideo,
-      gravity
+      gravity,
+      timeFactor().label
     );
   } else {
     const effectiveMetadata = { ...currentVideo, fps: currentVideo.fps * getDuplicationFactor() };

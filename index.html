@@ -466,9 +466,11 @@
         </div>
       </div>
       <p class="hint">
-        Le <strong>FPS d'enregistrement</strong> est la cadence réelle de tournage (ex. 240 pour un slow-mo).
-        Le moteur d'analyse déduit automatiquement le facteur d'étirement/duplication de la vidéo
-        à partir des timestamps exacts de chaque frame.
+        Le <strong>FPS d'enregistrement</strong> est utilisé <strong>uniquement</strong> quand la vidéo a été
+        exportée à cadence lente (ex. 30 fps) : la cadence de capture y est absente du fichier et la saisie
+        est requise pour le facteur d'étirement. Pour une vidéo à sa cadence de capture (fichier iPhone
+        original à 240 fps), les timestamps exacts suffisent : cette valeur est <strong>ignorée</strong>.
+        La ligne d'information sous la vidéo et les résultats indiquent toujours la source utilisée.
       </p>
     </section>
 

@@ -30,7 +30,8 @@ export function createTrialFromTimestamps(
   frames: { landing: number; takeoff: number; finalLanding: number },
   times: { landing: number; takeoff: number; finalLanding: number },
   metadata: VideoMetadata,
-  gravity: number = 9.81
+  gravity: number = 9.81,
+  notes: string = ''
 ): Trial {
   const result = calculateRSIFromTimestamps(
     times.landing,
@@ -57,7 +58,7 @@ export function createTrialFromTimestamps(
     metadata: { ...metadata },
     result,
     formattedResult,
-    notes: '',
+    notes,
   };
 }
 
