@@ -66,6 +66,47 @@ async function downloadWithProgress(
 }
 
 /**
+ * Diagnostic indépendant : exécute le core UMD dans un worker classique
+ * minimal que nous contrôlons. Isole la cause racine d'un échec : réseau,
+ * syntaxe non supportée, ou exécution crashée.
+ */
+function probeCoreExecution(coreJsUrl: string): Promise<{ ok: boolean; error?: string }> {
+  return new Promise((resolve) => {
+    const source =
+      `try { importScripts(${JSON.stringify(coreJsUrl)}); ` +
+      `postMessage({ ok: typeof self.createFFmpegCore === 'function' }); } ` +
+      `catch (e) { postMessage({ ok: false, error: String(e && (e.stack || e.message) || e) }); }`;
+
+    let worker: Worker;
+    try {
+      worker = new Worker(
+        URL.createObjectURL(new Blob([source], { type: 'text/javascript' }))
+      );
+    } catch (error) {
+      resolve({ ok: false, error: `création du worker impossible : ${String(error)}` });
+      return;
+    }
+
+    let settled = false;
+    const finish = (result: { ok: boolean; error?: string }) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timeoutId);
+      worker.terminate();
+      resolve(result);
+    };
+    const timeoutId = window.setTimeout(
+      () => finish({ ok: false, error: 'expiration après 30 s' }),
+      30000
+    );
+
+    worker.onmessage = (event: MessageEvent) => finish(event.data);
+    worker.onerror = (event: ErrorEvent) =>
+      finish({ ok: false, error: `${event.message} (${event.filename}:${event.lineno})` });
+  });
+}
+
+/**
  * Charge le moteur ffmpeg.wasm (une seule fois par session).
  * @param onDownloadProgress - Progression du téléchargement du core (0-1)
  */
@@ -77,59 +118,73 @@ export async function getFFmpegEngine(
 
   loadingPromise = (async () => {
     const base = coreBaseURL();
-    const coreJsUrl = new URL('ffmpeg-core.js', base).href;
-    const coreWasmUrl = new URL('ffmpeg-core.wasm', base).href;
+    const umdJsUrl = new URL('ffmpeg-core.js', base).href;
+    const esmJsUrl = new URL('esm/ffmpeg-core.js', base).href;
+    const wasmUrl = new URL('ffmpeg-core.wasm', base).href;
 
-    // Vérification précoce + copie légère du core.js (112 Ko) pour le
-    // repli blob. Le WASM (32 Mo) n'est PAS pré-téléchargé : c'est le
-    // worker qui le récupère, pour ne jamais dédoubler 32 Mo en RAM
-    // (critique sur iPhone).
-    const coreJs = await downloadWithProgress(coreJsUrl, onDownloadProgress);
+    // Vérification d'accessibilité + copie légère du core UMD (112 Ko)
+    // pour le repli blob. Le WASM (32 Mo) reste téléchargé par le worker.
+    const umdJs = await downloadWithProgress(umdJsUrl, onDownloadProgress);
 
-    const ffmpeg = new FFmpeg();
-    // Listeners uniques attachés à la création de l'instance
-    ffmpeg.on('log', ({ message }) => {
-      currentLogHandler?.(message);
-    });
-    ffmpeg.on('progress', ({ progress }) => {
-      currentProgressHandler?.(progress);
-    });
+    const attachListeners = (instance: FFmpeg) => {
+      instance.on('log', ({ message }) => {
+        currentLogHandler?.(message);
+      });
+      instance.on('progress', ({ progress }) => {
+        currentProgressHandler?.(progress);
+      });
+    };
 
-    let directError: unknown = null;
-    let blobError: unknown = null;
+    const makeLoad = (coreURL: string) => async (): Promise<FFmpeg> => {
+      const instance = new FFmpeg();
+      attachListeners(instance);
+      await instance.load({ coreURL, wasmURL: wasmUrl });
+      return instance;
+    };
 
-    // 1) URL HTTP directes (same-origin) : le mode le plus fiable —
-    // notamment sur iPhone / PWA installée, où WebKit restreint l'accès
-    // aux URLs blob: depuis un Worker.
-    try {
-      await ffmpeg.load({ coreURL: coreJsUrl, wasmURL: coreWasmUrl });
-      ffmpegInstance = ffmpeg;
-      return ffmpeg;
-    } catch (error) {
-      directError = error;
+    // Le worker du package est TOUJOURS un module worker (type: "module")
+    // où importScripts n'existe pas : le package bascule sur un import
+    // dynamique, conçu pour le core ESM — chemin natif, le plus fiable
+    // (notamment Safari iOS). Puis essais UMD (classic) en repli.
+    const attempts: Array<{ label: string; run: () => Promise<FFmpeg> }> = [
+      { label: 'core ESM', run: makeLoad(esmJsUrl) },
+      { label: 'core UMD (URL directe)', run: makeLoad(umdJsUrl) },
+      {
+        label: 'core UMD (blob)',
+        run: async () => {
+          const blobURL = URL.createObjectURL(
+            new Blob([umdJs as unknown as BlobPart], { type: 'text/javascript' })
+          );
+          try {
+            return await makeLoad(blobURL)();
+          } finally {
+            URL.revokeObjectURL(blobURL);
+          }
+        },
+      },
+    ];
+
+    const errors: string[] = [];
+    for (const attempt of attempts) {
+      try {
+        ffmpegInstance = await attempt.run();
+        return ffmpegInstance;
+      } catch (error) {
+        errors.push(
+          `${attempt.label} : ${error instanceof Error ? error.message : String(error)}`
+        );
+      }
     }
 
-    // 2) Repli : core en blob (112 Ko), WASM en URL directe
-    const coreBlobURL = URL.createObjectURL(
-      new Blob([coreJs as unknown as BlobPart], { type: 'text/javascript' })
-    );
-    try {
-      await ffmpeg.load({ coreURL: coreBlobURL, wasmURL: coreWasmUrl });
-      ffmpegInstance = ffmpeg;
-      return ffmpeg;
-    } catch (error) {
-      blobError = error;
-    } finally {
-      URL.revokeObjectURL(coreBlobURL);
-    }
+    // Diagnostic indépendant : le core s'exécute-t-il dans un worker
+    // classique que nous contrôlons ? Ce test isole la cause racine.
+    const probe = await probeCoreExecution(umdJsUrl);
 
-    // Diagnostic complet remonté à l'interface
-    console.error('[RSI Calc] Chargement ffmpeg (URL directe) :', directError);
-    console.error('[RSI Calc] Chargement ffmpeg (blob) :', blobError);
+    const diagnosis = probe.ok
+      ? 'le core s\'exécute correctement dans un worker classique de diagnostic'
+      : `le core ne s'exécute pas non plus dans le worker de diagnostic : ${probe.error}`;
     throw new Error(
-      `Chargement du moteur ffmpeg impossible — ` +
-      `URL directe : ${directError instanceof Error ? directError.message : String(directError)} ; ` +
-      `blob : ${blobError instanceof Error ? blobError.message : String(blobError)}`
+      `Chargement du moteur ffmpeg impossible. Tentatives : [${errors.join(' ; ')}]. Diagnostic : ${diagnosis}`
     );
   })();
 

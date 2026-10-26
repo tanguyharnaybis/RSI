@@ -22,10 +22,16 @@ async function copy() {
   }
 
   await fs.mkdir(destDir, { recursive: true });
-  for (const file of ['ffmpeg-core.js', 'ffmpeg-core.wasm']) {
-    await fs.copyFile(path.join(coreDir, file), path.join(destDir, file));
-  }
-  console.log(`✓ Core ffmpeg copié dans public/ffmpeg/ (depuis ${coreDir})`);
+  // Le core UMD (chemin classic) + le core ESM (chemin module worker,
+  // requis par Safari) partagent le même binaire WASM.
+  await fs.mkdir(path.join(destDir, 'esm'), { recursive: true });
+  await fs.copyFile(path.join(coreDir, 'ffmpeg-core.js'), path.join(destDir, 'ffmpeg-core.js'));
+  await fs.copyFile(path.join(coreDir, 'ffmpeg-core.wasm'), path.join(destDir, 'ffmpeg-core.wasm'));
+  await fs.copyFile(
+    path.join(root, 'node_modules', '@ffmpeg', 'core', 'dist', 'esm', 'ffmpeg-core.js'),
+    path.join(destDir, 'esm', 'ffmpeg-core.js')
+  );
+  console.log(`✓ Core ffmpeg copié dans public/ffmpeg/ (UMD + ESM + wasm)`);
 }
 
 copy().catch((error) => {
