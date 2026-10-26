@@ -7,7 +7,7 @@
 import Chart from 'chart.js/auto';
 import type { Session, Trial, VideoMetadata, VideoFrame, MarkerPoints } from './types';
 import { calculateRSI, calculateRSIFromTimestamps, formatRSIResult } from './calculation';
-import { detectJumps } from './calculation/jumpDetection';
+import { detectJumps, estimateDuplication } from './calculation/jumpDetection';
 import type { JumpCandidate } from './calculation/jumpDetection';
 import { determineTimeFactor } from './calculation/timeSource';
 import type { TimeFactor } from './calculation/timeSource';
@@ -55,6 +55,11 @@ let currentJumpIndex = 0;
 let autoCandidates: JumpCandidate[] = [];
 /** Frame du marqueur consulté (retour rapide après vérification) */
 let referenceFrame: number | null = null;
+/**
+ * Duplication estimée depuis les scores de mouvement (avant navigation) :
+ * 1 par défaut ; > 1 si le fichier contient des frames identiques ×N.
+ */
+let estimatedDuplication = 1;
 
 const MAX_JUMPS = 15;
 const DEFAULT_BEST_COUNT = 5;
@@ -170,6 +175,7 @@ async function runJumpDetection(): Promise<void> {
   const result = detectJumps({
     sceneScores: frameIndex.sceneScores,
     frameTimes,
+    duplication: estimatedDuplication,
     expectedJumps: selectedJumpCount(),
   });
   autoCandidates = result.jumps;
@@ -192,8 +198,9 @@ async function runJumpDetection(): Promise<void> {
   showAlert(
     `${autoCandidates.length} saut(s) détecté(s) (confiance ${result.confidence}` +
     `${autoCandidates.length !== selectedJumpCount()
-      ? `, ${selectedJumpCount()} attendus` : ''}) — ` +
-    'saut 1 pré-chargé : vérifiez chaque marqueur (chip cliquable, frame précédente, ±1/±10) puis validez.',
+      ? `, ${selectedJumpCount()} attendus` : ''})` +
+    ` — facteur temps ×${tf.factor} (${tf.label}). ` +
+    'Saut 1 pré-chargé : vérifiez chaque marqueur (chip cliquable, frame précédente, ±1/±10) puis validez.',
     'success'
   );
 }
@@ -963,7 +970,11 @@ function updateMarkerChips(): void {
 
 /** Facteur de duplication confirmé (1 = aucune duplication) */
 function getDuplicationFactor(): number {
-  return videoPlayer?.getConfirmedDuplicationFactor() ?? 1;
+  const confirmed = videoPlayer?.getConfirmedDuplicationFactor() ?? 1;
+  if (confirmed > 1) return confirmed;
+  // Estimation automatique depuis les scores de mouvement (avant
+  // navigation) — évite des temps ×N dans un fichier dupliqué
+  return estimatedDuplication;
 }
 
 /** Navigation en cours (évite les clics simultanés) */
@@ -1073,6 +1084,7 @@ async function runFfmpegAnalysis(): Promise<void> {
       frameIndex = null;
       videoPlayer?.setTimestampIndex(null);
     }
+    estimatedDuplication = 1;
 
     ffmpegSetStatus(
       isFFmpegEngineReady()
@@ -1104,6 +1116,23 @@ async function runFfmpegAnalysis(): Promise<void> {
     ffmpegSetProgress(null);
     updateVideoInfo();
     updateFrameUI(0);
+
+    // Estimer la duplication depuis les scores (avant toute navigation) :
+    // les temps réels et la détection automatique en dépendent même si
+    // l'utilisateur n'a pas encore navigué frame par frame.
+    if (frameIndex.sceneScores) {
+      estimatedDuplication = estimateDuplication(frameIndex.sceneScores);
+      videoPlayer?.seedDuplicationHint(estimatedDuplication);
+      if (estimatedDuplication > 1) {
+        showAlert(
+          `Frames dupliquées ×${estimatedDuplication} détectées automatiquement — ` +
+          'temps réels et navigation ajustés.',
+          'info'
+        );
+      }
+    } else {
+      estimatedDuplication = 1;
+    }
 
     // Détection automatique disponible si les scores de mouvement ont été
     // collectés pendant le décodage

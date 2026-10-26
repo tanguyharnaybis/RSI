@@ -4,7 +4,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { detectJumps } from '../src/calculation/jumpDetection';
+import { detectJumps, estimateDuplication } from '../src/calculation/jumpDetection';
 
 /**
  * Profil réaliste d'une série de pogo jumps : immobilité initiale, puis
@@ -46,6 +46,64 @@ function buildProfile(jumps: number, opts: { contactFrames?: number; flightFrame
 
   return { sceneScores: Float64Array.from(scores), frameTimes: Float64Array.from(times) };
 }
+
+describe('estimateDuplication', () => {
+  it('retourne 1 sur un fichier sans duplication (frames actives consécutives)', () => {
+    const { sceneScores } = buildProfile(5);
+    expect(estimateDuplication(sceneScores)).toBe(1);
+  });
+
+  it('détecte la duplication ×8 (chaque frame copiée 8 fois)', () => {
+    // Extruder le profil ×8 : 7 copies avec score ~0 entre frames actives
+    const { sceneScores } = buildProfile(5);
+    const duplicated = new Float64Array(sceneScores.length * 8);
+    for (let i = 0; i < sceneScores.length; i++) {
+      // La première copie porte le score d'origine (diff avec la frame
+      // précédente), les 7 suivantes sont identiques → score 0
+      duplicated[i * 8] = sceneScores[i];
+      for (let copy = 1; copy < 8; copy++) {
+        duplicated[i * 8 + copy] = 0;
+      }
+    }
+    expect(estimateDuplication(duplicated)).toBe(8);
+  });
+
+  it('la détection fonctionne sur un fichier dupliqué ×8 avec temps réels corrects', () => {
+    // Profil dupliqué : les temps VIDÉO sont 8× plus longs ; avec le
+    // facteur 8 appliqué, les durées réelles sont restaurées et les
+    // sauts sont détectés comme sur le fichier original.
+    const { sceneScores, frameTimes } = buildProfile(4);
+    const duplicatedScores = new Float64Array(sceneScores.length * 8);
+    const duplicatedVideoTimes = new Float64Array(sceneScores.length * 8);
+    for (let i = 0; i < sceneScores.length; i++) {
+      duplicatedScores[i * 8] = sceneScores[i];
+      for (let copy = 1; copy < 8; copy++) {
+        duplicatedScores[i * 8 + copy] = 0;
+      }
+      for (let copy = 0; copy < 8; copy++) {
+        duplicatedVideoTimes[i * 8 + copy] = frameTimes[i] * 8;
+      }
+    }
+
+    // Sans le facteur : contacts ×8 en durée → AUCUN saut détecté
+    const naive = detectJumps({
+      sceneScores: duplicatedScores,
+      frameTimes: duplicatedVideoTimes,
+    });
+    expect(naive.jumps).toHaveLength(0);
+
+    // Avec le facteur 8 (temps réels) : les 3 sauts sont détectés
+    const realTimes = new Float64Array(duplicatedVideoTimes.length);
+    for (let i = 0; i < realTimes.length; i++) realTimes[i] = duplicatedVideoTimes[i] / 8;
+    const result = detectJumps({
+      sceneScores: duplicatedScores,
+      frameTimes: realTimes,
+      duplication: 8,
+    });
+    expect(result.jumps).toHaveLength(3);
+    expect(result.confidence).toBe('moyenne');
+  });
+});
 
 describe('detectJumps', () => {
   it('détecte tous les sauts d\'une série de 10 pogo jumps', () => {

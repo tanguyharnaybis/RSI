@@ -49,6 +49,13 @@ export interface DetectionParams {
   minContactMs?: number;
   /** Durée maximale d'un contact (ms, défaut 500 — exclut les immobilités) */
   maxContactMs?: number;
+  /**
+   * Facteur de duplication (frames identiques consécutives, estimé depuis
+   * les scores). > 1 : les scores sont réduits à 1 par groupe de N
+   * copies avant la segmentation — sans quoi les scores nuls des copies
+   * fausserient la calibration du seuil.
+   */
+  duplication?: number;
 }
 
 interface CalmSegment {
@@ -108,12 +115,46 @@ function otsuThreshold(sorted: Float64Array): number {
 }
 
 /**
+ * Estime le facteur de duplication (frames identiques consécutives) depuis
+ * les scores de mouvement — AVANT toute navigation manuelle.
+ *
+ * Dans un fichier où chaque frame est dupliquée ×N, seules les frames
+ * uniques montrent du mouvement : les frames « actives » (score élevé)
+ * apparaissent tous les N samples. La médiane des écarts entre frames
+ * actives donne N. Sur un fichier sans duplication, les frames actives
+ * sont consécutives → N = 1.
+ */
+export function estimateDuplication(sceneScores: Float64Array): number {
+  if (sceneScores.length < 16) return 1;
+
+  const sorted = Float64Array.from(sceneScores).sort();
+  const threshold = otsuThreshold(sorted);
+
+  const activeIndices: number[] = [];
+  for (let i = 0; i < sceneScores.length; i++) {
+    if (sceneScores[i] > threshold) activeIndices.push(i);
+  }
+  if (activeIndices.length < 4) return 1;
+
+  const gaps: number[] = [];
+  for (let i = 1; i < activeIndices.length; i++) {
+    const gap = activeIndices[i] - activeIndices[i - 1];
+    if (gap >= 1) gaps.push(gap);
+  }
+  if (gaps.length === 0) return 1;
+
+  gaps.sort((a, b) => a - b);
+  const medianGap = gaps[Math.floor(gaps.length / 2)];
+  return Math.min(32, Math.max(1, medianGap));
+}
+
+/**
  * Détecte les sauts d'une série à partir des scores de mouvement.
  */
 export function detectJumps(params: DetectionParams): DetectionResult {
-  const { sceneScores, frameTimes } = params;
   const minContactMs = params.minContactMs ?? 60;
   const maxContactMs = params.maxContactMs ?? 500;
+  const duplication = Math.max(1, Math.round(params.duplication ?? 1));
   const empty: DetectionResult = {
     jumps: [],
     activeThreshold: 0,
@@ -122,10 +163,33 @@ export function detectJumps(params: DetectionParams): DetectionResult {
   };
 
   if (
-    sceneScores.length < 10 ||
-    frameTimes.length !== sceneScores.length
+    params.sceneScores.length < 10 ||
+    params.frameTimes.length !== params.sceneScores.length
   ) {
     return empty;
+  }
+
+  // Réduction des copies : 1 score par groupe de N (le vrai mouvement est
+  // le maximum du groupe, les copies portent des scores nuls). Les temps
+  // réels suivent (1 sur N) — les durées restent exactes.
+  let sceneScores = params.sceneScores;
+  let frameTimes = params.frameTimes;
+  if (duplication > 1) {
+    const groupCount = Math.floor(params.sceneScores.length / duplication);
+    if (groupCount < 10) return empty;
+    const scores = new Float64Array(groupCount);
+    const times = new Float64Array(groupCount);
+    for (let g = 0; g < groupCount; g++) {
+      let max = 0;
+      for (let k = 0; k < duplication; k++) {
+        const score = params.sceneScores[g * duplication + k];
+        if (score > max) max = score;
+      }
+      scores[g] = max;
+      times[g] = params.frameTimes[g * duplication];
+    }
+    sceneScores = scores;
+    frameTimes = times;
   }
 
   // Calibration sur la distribution de CETTE vidéo (aucune constante magique)

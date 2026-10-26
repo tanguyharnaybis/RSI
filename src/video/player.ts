@@ -501,6 +501,18 @@ export class FrameByFramePlayer implements VideoPlayer {
   }
 
   /**
+   * Amorce le facteur de duplication (estimation automatique depuis les
+   * scores de mouvement) : la navigation ±1 frame saute directement les
+   * copies, sans attendre les observations manuelles.
+   * Ne modifie PAS le facteur confirmé utilisé dans les calculs.
+   */
+  seedDuplicationHint(hint: number): void {
+    if (Number.isFinite(hint) && hint > 1) {
+      this.duplicationHint = Math.round(hint);
+    }
+  }
+
+  /**
    * Empreinte visuelle de la frame affichée (niveaux de gris réduits)
    */
   private grabFingerprint(): Uint8Array | null {
