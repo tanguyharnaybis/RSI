@@ -478,6 +478,12 @@
         Le <strong>FPS de lecture</strong> est celui du fichier vidéo (détection automatique) : il sert uniquement à la navigation frame par frame.
         Saisissez-le manuellement uniquement si la détection échoue (ex. 30 pour un export slow-mo étiré).
       </p>
+
+      <div class="form-group" style="margin-top:12px">
+        <label for="btn-ffmpeg-preload">Moteur d'analyse exacte (ffmpeg, ~32 Mo — une seule fois)</label>
+        <button id="btn-ffmpeg-preload" class="btn btn-block">Précharger le moteur maintenant</button>
+        <div id="ffmpeg-preload-status" class="hint" style="display:none" aria-live="polite"></div>
+      </div>
     </section>
 
     <!-- 3. Marquage -->

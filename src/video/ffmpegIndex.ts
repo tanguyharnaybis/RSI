@@ -106,6 +106,11 @@ function probeCoreExecution(coreJsUrl: string): Promise<{ ok: boolean; error?: s
   });
 }
 
+/** Le moteur est-il déjà chargé (préchargement possible avant import) */
+export function isFFmpegEngineReady(): boolean {
+  return ffmpegInstance !== null;
+}
+
 /**
  * Charge le moteur ffmpeg.wasm (une seule fois par session).
  * @param onDownloadProgress - Progression du téléchargement du core (0-1)

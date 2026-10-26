@@ -523,13 +523,17 @@ export class FrameByFramePlayer implements VideoPlayer {
         this.lastConfirmedSample = sample;
         resolve();
       };
-      const timeoutId = window.setTimeout(done, 2500);
+      // Timeout court avec résolution best-effort (la frame la plus proche
+      // est affichée) : une égalité stricte entre les timelines conteneur
+      // et lecteur (edit lists, arrondis) bloquerait la navigation.
+      const timeoutId = window.setTimeout(done, 800);
 
       if (typeof video.requestVideoFrameCallback === 'function') {
         const check = (_now: number, meta: { mediaTime: number }) => {
           if (settled) return;
-          // La frame présentée correspond-elle au sample visé ?
-          if (this.frameAtVideoTime(meta.mediaTime) === sample) {
+          // Tolérance ±1 frame : la frame présentée correspond au sample
+          // visé (ou sa voisine immédiate en cas de décalage de timeline)
+          if (Math.abs(this.frameAtVideoTime(meta.mediaTime) - sample) <= 1) {
             window.clearTimeout(timeoutId);
             done();
           } else {

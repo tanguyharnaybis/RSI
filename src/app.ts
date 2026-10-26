@@ -10,7 +10,7 @@ import { calculateRSI, calculateRSIFromTimestamps, formatRSIResult } from './cal
 import { FrameByFramePlayer } from './video/player';
 import { extractVideoMetadata, validateVideoFile, computeFrameCount, formatDuration, detectPlaybackFps } from './video/loader';
 import { parseMp4FileMetadata } from './video/metadataParser';
-import { analyzeVideoFrames, disposeFFmpegEngine } from './video/ffmpegIndex';
+import { analyzeVideoFrames, disposeFFmpegEngine, getFFmpegEngine, isFFmpegEngineReady } from './video/ffmpegIndex';
 import type { FrameIndex } from './types';
 import { createMarkerManager, MARKER_TYPES } from './annotation';
 import type { MarkerType } from './annotation';
@@ -89,6 +89,8 @@ const el = {
   get ffmpegStatus() { return $('ffmpeg-status'); },
   get ffmpegProgress() { return $('ffmpeg-progress'); },
   get ffmpegProgressFill() { return $('ffmpeg-progress-fill'); },
+  get btnFfmpegPreload() { return $<HTMLButtonElement>('btn-ffmpeg-preload'); },
+  get ffmpegPreloadStatus() { return $('ffmpeg-preload-status'); },
 };
 
 // ============================================
@@ -238,6 +240,43 @@ function bindEvents(): void {
 
   // Analyse exacte (ffmpeg)
   el.btnFfmpegAnalyze.addEventListener('click', () => void runFfmpegAnalysis());
+
+  // Préchargement du moteur (possible avant l'import d'une vidéo)
+  el.btnFfmpegPreload.addEventListener('click', () => void runFfmpegPreload());
+}
+
+// ============================================
+// Préchargement du moteur ffmpeg
+// ============================================
+
+let ffmpegPreloading = false;
+
+async function runFfmpegPreload(): Promise<void> {
+  if (ffmpegPreloading || isFFmpegEngineReady()) return;
+  ffmpegPreloading = true;
+  const button = el.btnFfmpegPreload;
+  button.disabled = true;
+  button.textContent = 'Préchargement en cours…';
+  const status = el.ffmpegPreloadStatus;
+  status.style.display = 'block';
+  status.textContent = 'Chargement du moteur ffmpeg (≈32 Mo, une seule fois)…';
+
+  try {
+    await getFFmpegEngine((ratio) => {
+      status.textContent =
+        `Chargement du moteur ffmpeg… ${Math.round(ratio * 100)} % (une seule fois)`;
+    });
+    status.textContent =
+      'Moteur chargé ✓ — l\'indexation des frames sera plus rapide après l\'import d\'une vidéo.';
+    button.textContent = 'Moteur chargé ✓';
+  } catch (error) {
+    console.error('[RSI Calc] Préchargement ffmpeg :', error);
+    status.textContent = `Échec : ${error instanceof Error ? error.message : String(error)}`;
+    button.disabled = false;
+    button.textContent = 'Réessayer le préchargement';
+  } finally {
+    ffmpegPreloading = false;
+  }
 }
 
 // ============================================
@@ -710,7 +749,11 @@ async function runFfmpegAnalysis(): Promise<void> {
       videoPlayer?.setTimestampIndex(null);
     }
 
-    ffmpegSetStatus('Chargement du moteur ffmpeg (≈32 Mo, une seule fois)…');
+    ffmpegSetStatus(
+      isFFmpegEngineReady()
+        ? 'Moteur déjà chargé — démarrage du décodage…'
+        : 'Chargement du moteur ffmpeg (≈32 Mo, une seule fois)…'
+    );
     ffmpegSetProgress(null);
     const index = await analyzeVideoFrames(currentFile, {
       onDecodeProgress: (ratio) => {
