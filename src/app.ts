@@ -8,8 +8,7 @@ import Chart from 'chart.js/auto';
 import type { Session, Trial, VideoMetadata, VideoFrame, MarkerPoints } from './types';
 import { calculateRSI, calculateRSIFromTimestamps, formatRSIResult } from './calculation';
 import { FrameByFramePlayer } from './video/player';
-import { extractVideoMetadata, validateVideoFile, computeFrameCount, formatDuration, detectPlaybackFps } from './video/loader';
-import { parseMp4FileMetadata } from './video/metadataParser';
+import { extractVideoMetadata, validateVideoFile, formatDuration } from './video/loader';
 import { analyzeVideoFrames, disposeFFmpegEngine, getFFmpegEngine, isFFmpegEngineReady } from './video/ffmpegIndex';
 import type { FrameIndex } from './types';
 import { createMarkerManager, MARKER_TYPES } from './annotation';
@@ -66,7 +65,6 @@ const el = {
   get timelineFill() { return $('timeline-fill'); },
   get timelineThumb() { return $('timeline-thumb'); },
   get fpsInput() { return $<HTMLInputElement>('fps-input'); },
-  get playbackFpsInput() { return $<HTMLInputElement>('playback-fps-input'); },
   get gravityInput() { return $<HTMLInputElement>('gravity-input'); },
   get btnMarkLanding() { return $<HTMLButtonElement>('btn-mark-landing'); },
   get btnMarkTakeoff() { return $<HTMLButtonElement>('btn-mark-takeoff'); },
@@ -182,7 +180,6 @@ function bindEvents(): void {
 
   // Paramètres
   el.fpsInput.addEventListener('change', () => applyFps(parseFloat(el.fpsInput.value)));
-  el.playbackFpsInput.addEventListener('change', () => void applyManualPlaybackFps());
   el.gravityInput.addEventListener('change', () => {
     const g = parseFloat(el.gravityInput.value);
     gravity = clamp(Number.isFinite(g) && g > 0 ? g : 9.81, 1, 20);
@@ -345,85 +342,21 @@ async function handleVideoUpload(file: File): Promise<void> {
     fps,
   };
 
-  // Afficher la vidéo AVANT la mesure à la lecture : le navigateur ne
-  // présente pas les frames d'un élément invisible.
+  // Afficher la vidéo, puis l'analyse par le moteur ffmpeg se lance
+  // AUTOMATIQUEMENT : c'est la seule méthode (comptage réel et timestamps
+  // exacts de chaque frame — fiable en VFR, fichiers iPhone compris).
   el.videoSection.style.display = 'block';
-
-  // Déterminer le FPS de lecture du conteneur (navigation frame par frame).
-  // Priorité 1 : parsing binaire du fichier (table des frames) — exact.
-  // Priorité 2 : mesure à la lecture (frames présentées).
-  // Priorité 3 : FPS de lecture saisi manuellement (champ Paramètres).
-  // JAMAIS le FPS d'enregistrement : il ne décrit pas le conteneur.
-  const parsed = await parseMp4FileMetadata(file);
-  let playbackFps: number | null = null;
-  let frameCount = 0;
-  let source = '';
-
-  if (parsed && parsed.frameCount > 1 && parsed.playbackFps > 0) {
-    playbackFps = parsed.playbackFps;
-    frameCount = parsed.frameCount;
-    source = parsed.fragmented ? 'métadonnées du fichier (fragmenté)' : 'métadonnées du fichier';
-  } else {
-    const detected = await detectPlaybackFps(el.videoElement);
-    el.videoElement.pause();
-    el.videoElement.currentTime = 0;
-    if (detected && detected > 0) {
-      playbackFps = detected;
-      frameCount = computeFrameCount(duration, detected);
-      source = 'mesure à la lecture';
-    } else {
-      const manual = parseFloat(el.playbackFpsInput.value);
-      if (Number.isFinite(manual) && manual > 0) {
-        playbackFps = clamp(manual, 1, 1000);
-        frameCount = computeFrameCount(duration, playbackFps);
-        source = 'saisie manuelle';
-      }
-    }
-  }
-
-  if (playbackFps) {
-    el.playbackFpsInput.value = String(Math.round(playbackFps * 100) / 100);
-  }
-  currentVideo.playbackFps = playbackFps ?? undefined;
-  currentVideo.frameCount = frameCount;
-
   el.fpsInput.value = String(currentVideo.fps);
+  setNavigationEnabled(false);
+  el.btnFfmpegAnalyze.style.display = 'none';
+  el.videoInfo.textContent = 'Analyse des frames par le moteur ffmpeg…';
 
-  if (!playbackFps) {
-    // Détection impossible : navigation désactivée jusqu'à saisie manuelle.
-    setNavigationEnabled(false);
-    el.videoInfo.textContent =
-      'FPS de lecture non déterminé — saisissez-le dans les Paramètres (ex. 30) pour activer la navigation.';
-    el.btnFfmpegAnalyze.disabled = false; // l'analyse ffmpeg reste possible
-    showAlert(
-      'Impossible de déterminer le FPS de lecture automatiquement. ' +
-      'Saisissez le FPS de lecture dans les Paramètres (ex. 30 pour un export slow-mo étiré) ' +
-      '— ou lancez l\'indexation ffmpeg (bouton sous la vidéo) pour tout déterminer exactement.',
-      'error'
-    );
-    return;
-  }
-
-  initVideoPlayer(currentVideo);
-  resetMarkers();
-  setNavigationEnabled(true);
-  el.btnFfmpegAnalyze.disabled = false;
-  updateVideoInfo();
-  updateFrameUI(0);
-
-  const slowdown = currentVideo.fps / playbackFps;
-  const ratioNote = slowdown > 1.05
-    ? ` Ralenti ×${slowdown.toFixed(1)} — temps réel du saut ≈ ${(frameCount / currentVideo.fps).toFixed(1)} s.`
-    : '';
-  showAlert(
-    `Vidéo chargée : ${frameCount} frames, lecture ${Math.round(playbackFps)} fps (${source}).${ratioNote}`,
-    'success'
-  );
+  void runFfmpegAnalysis();
 }
 
 /**
- * Active/désactive la navigation frame par frame (quand le FPS de lecture
- * n'est pas déterminé, la navigation est impossible — pas de faux repli).
+ * Active/désactive la navigation frame par frame (l'index ffmpeg des
+ * timestamps est indispensable — pas de méthode de substitution).
  */
 function setNavigationEnabled(enabled: boolean): void {
   el.btnPrevFrame.disabled = !enabled;
@@ -434,47 +367,8 @@ function setNavigationEnabled(enabled: boolean): void {
 }
 
 /**
- * Applique le FPS de lecture saisi manuellement (champ Paramètres) :
- * recalcule le compteur de frames et active la navigation.
+ * Crée le lecteur frame-par-frame après l'indexation ffmpeg réussie.
  */
-function applyManualPlaybackFps(): Promise<void> {
-  if (!currentVideo || !Number.isFinite(currentVideo.duration)) return Promise.resolve();
-
-  const manual = parseFloat(el.playbackFpsInput.value);
-  if (!Number.isFinite(manual) || manual <= 0) {
-    // Champ vidé : si le player existe, garder la valeur précédente
-    if (currentVideo.playbackFps && videoPlayer) {
-      el.playbackFpsInput.value = String(currentVideo.playbackFps);
-    }
-    return Promise.resolve();
-  }
-
-  const playbackFps = clamp(manual, 1, 1000);
-  el.playbackFpsInput.value = String(playbackFps);
-  currentVideo.playbackFps = playbackFps;
-  currentVideo.frameCount = computeFrameCount(currentVideo.duration, playbackFps);
-
-  if (videoPlayer) {
-    videoPlayer.setMetadata({
-      playbackFps,
-      frameCount: currentVideo.frameCount,
-    });
-  } else {
-    // Détection avait échoué : créer le player maintenant
-    initVideoPlayer(currentVideo);
-    setNavigationEnabled(true);
-  }
-
-  markerManager.initialize(currentVideo.frameCount);
-  updateVideoInfo();
-  updateFrameUI(videoPlayer?.getCurrentFrame() ?? 0);
-  showAlert(
-    `FPS de lecture : ${Math.round(playbackFps)} — ${currentVideo.frameCount} frames.`,
-    'info'
-  );
-  return Promise.resolve();
-}
-
 function initVideoPlayer(metadata: VideoMetadata): void {
   if (videoPlayer) {
     videoPlayer.destroy();
@@ -515,46 +409,30 @@ function applyFps(fps: number): void {
   if (!currentVideo) return;
 
   currentVideo.fps = valid;
-  // Le compteur de frames reste basé sur le FPS de lecture (jamais le FPS
-  // d'enregistrement : il ne décrit pas la structure du conteneur)
-  const playback = currentVideo.playbackFps;
-  if (playback) {
-    currentVideo.frameCount = computeFrameCount(currentVideo.duration, playback);
-    if (videoPlayer) {
-      videoPlayer.setMetadata({ fps: valid, frameCount: currentVideo.frameCount });
-    }
-    markerManager.initialize(currentVideo.frameCount);
-    updateVideoInfo();
-    updateFrameUI(videoPlayer?.getCurrentFrame() ?? 0);
+  // Le compteur de frames vient de l'index ffmpeg (jamais d'un calcul) ;
+  // le FPS d'enregistrement ne sert qu'à la conversion en temps réels
+  // (facteur d'étirement) et à l'affichage.
+  if (videoPlayer) {
+    videoPlayer.setMetadata({ fps: valid });
   }
+  updateVideoInfo();
   showAlert(`FPS d'enregistrement mis à jour : ${valid}`, 'info');
 }
 
 function updateVideoInfo(): void {
   if (!currentVideo) return;
-  const playback = currentVideo.playbackFps;
-  if (!playback) {
-    el.videoInfo.textContent =
-      'FPS de lecture non déterminé — saisissez-le dans les Paramètres (ex. 30).';
+  if (!frameIndex || !currentVideo.playbackFps) {
+    el.videoInfo.textContent = 'Analyse des frames en cours…';
     return;
   }
-  const duplication = getDuplicationFactor();
-  // Ralenti visuel = fps d'enregistrement / (fps de lecture × duplication)
-  const slowdown = (currentVideo.fps * duplication) / playback;
-  // Durée réelle de la scène = frames / (fps d'enregistrement × duplication)
-  const realDuration = currentVideo.frameCount / (currentVideo.fps * duplication);
-  const indexBadge = frameIndex
-    ? ` · index ffmpeg : ${frameIndex.frameCount} frames, timestamps exacts` +
-      (temporalFactor() > 1 ? ` (étirement ×${temporalFactor()})` : '')
-    : '';
+  const k = temporalFactor();
+  // Durée réelle de la scène = durée vidéo / facteur total
+  const realDuration = (currentVideo.frameCount * frameIndex.medianInterval) / k;
   el.videoInfo.textContent =
     `${currentVideo.width}×${currentVideo.height} · ${formatDuration(currentVideo.duration)} · ` +
-    `${currentVideo.frameCount} frames · lecture ${Math.round(playback)} fps` +
-    (duplication > 1 ? ` · frames dupliquées ×${duplication}` : '') +
-    (slowdown > 1.05
-      ? ` · ralenti ×${slowdown.toFixed(1)} · temps réel ≈ ${realDuration.toFixed(1)} s`
-      : ` · ${currentVideo.fps} fps`) +
-    indexBadge;
+    `${currentVideo.frameCount} frames (timestamps exacts) · lecture ${Math.round(currentVideo.playbackFps)} fps` +
+    (k > 1 ? ` · facteur ×${k}` : ` · ${currentVideo.fps} fps`) +
+    ` · temps réel ≈ ${realDuration.toFixed(1)} s`;
 }
 
 function updateFrameUI(frame: number): void {
@@ -724,7 +602,12 @@ function ffmpegSetProgress(ratio: number | null): void {
  */
 function temporalFactor(): number {
   if (!frameIndex || !currentVideo) return 1;
-  return Math.max(1, Math.round(frameIndex.medianInterval * currentVideo.fps));
+  // Facteur total = étirement de la timeline (intervalle vidéo médian ×
+  // fps de capture) × duplication confirmée (frames identiques consécutives).
+  // Couvre les trois structures d'export : cadence de capture (×1),
+  // export étiré (×k), export avec frames dupliquées (×k).
+  const stretch = Math.max(1, Math.round(frameIndex.medianInterval * currentVideo.fps));
+  return stretch * getDuplicationFactor();
 }
 
 /** Temps réel d'une frame depuis l'index ffmpeg (VFR-exact) */
@@ -739,7 +622,7 @@ async function runFfmpegAnalysis(): Promise<void> {
   if (!currentVideo || !currentFile || ffmpegAnalyzing) return;
   ffmpegAnalyzing = true;
   el.btnFfmpegAnalyze.disabled = true;
-  el.btnFfmpegAnalyze.textContent = 'Analyse en cours…';
+  el.btnFfmpegAnalyze.style.display = 'none';
   ffmpegSetProgress(0);
 
   try {
@@ -751,7 +634,7 @@ async function runFfmpegAnalysis(): Promise<void> {
 
     ffmpegSetStatus(
       isFFmpegEngineReady()
-        ? 'Moteur déjà chargé — démarrage du décodage…'
+        ? 'Décodage de la vidéo et indexation des timestamps…'
         : 'Chargement du moteur ffmpeg (≈32 Mo, une seule fois)…'
     );
     ffmpegSetProgress(null);
@@ -763,41 +646,38 @@ async function runFfmpegAnalysis(): Promise<void> {
     });
 
     frameIndex = index;
-    videoPlayer?.setTimestampIndex(index);
+    // FPS de lecture équivalent, dérivé de l'index (affichage uniquement)
+    currentVideo.playbackFps =
+      index.medianInterval > 0 ? Math.round(1 / index.medianInterval) : currentVideo.fps;
+    currentVideo.frameCount = index.frameCount;
 
-    // Le comptage réel de ffmpeg fait foi : synchroniser le compteur
-    if (currentVideo.frameCount !== index.frameCount) {
-      currentVideo.frameCount = index.frameCount;
-      markerManager.clearAllMarkers();
-      updateMarkerChips();
-      if (videoPlayer) {
-        videoPlayer.setMetadata({ frameCount: index.frameCount });
-      }
-      showAlert(
-        `Comptage corrigé par l'index ffmpeg : ${index.frameCount} frames réelles.`,
-        'info'
-      );
-    }
+    // Créer (ou recréer) le lecteur avec l'index des timestamps exacts
+    initVideoPlayer(currentVideo);
+    videoPlayer!.setTimestampIndex(index);
+    resetMarkers();
+    markerManager.initialize(index.frameCount);
+    setNavigationEnabled(true);
 
     ffmpegSetStatus(null);
     ffmpegSetProgress(null);
-    el.btnFfmpegAnalyze.textContent = 'Frames indexées ✓ (relancer)';
     updateVideoInfo();
-    updateFrameUI(videoPlayer?.getCurrentFrame() ?? 0);
+    updateFrameUI(0);
 
     const k = temporalFactor();
+    const realDuration = (index.frameCount * index.medianInterval) / k;
     showAlert(
-      `Index ffmpeg : ${index.frameCount} frames, timestamps exacts ` +
-      `(intervalle vidéo médian ${frameIndex.medianInterval.toFixed(4)} s` +
-      (k > 1 ? `, étirement ×${k}` : ', cadence de capture') +
-      `). Calculs maintenant exacts même à cadence variable.`,
+      `Vidéo analysée : ${index.frameCount} frames réelles (timestamps exacts)` +
+      (k > 1 ? `, facteur ×${k}` : '') +
+      ` — temps réel ≈ ${realDuration.toFixed(1)} s.`,
       'success'
     );
   } catch (error) {
     console.error('[RSI Calc] Analyse ffmpeg :', error);
     ffmpegSetStatus(`Échec : ${error instanceof Error ? error.message : String(error)}`);
     ffmpegSetProgress(null);
-    el.btnFfmpegAnalyze.textContent = 'Réessayer l\'indexation (ffmpeg)';
+    setNavigationEnabled(false);
+    el.btnFfmpegAnalyze.textContent = 'Réessayer l\'analyse des frames';
+    el.btnFfmpegAnalyze.style.display = 'block';
     // Libérer le moteur en cas d'erreur mémoire pour permettre un nouvel essai
     if (/memory|allocation|abort/i.test(String(error))) {
       disposeFFmpegEngine();
