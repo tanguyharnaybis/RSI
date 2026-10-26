@@ -325,6 +325,8 @@ const el = {
   get videoWrapper() { return $('video-wrapper'); },
   get videoElement() { return $<HTMLVideoElement>('video-element'); },
   get btnPrevFrame() { return $<HTMLButtonElement>('btn-prev-frame'); },
+  get btnPrev10() { return $<HTMLButtonElement>('btn-prev-10'); },
+  get btnNext10() { return $<HTMLButtonElement>('btn-next-10'); },
   get btnPlayPause() { return $<HTMLButtonElement>('btn-play-pause'); },
   get btnNextFrame() { return $<HTMLButtonElement>('btn-next-frame'); },
   get btnZoom() { return $<HTMLButtonElement>('btn-zoom'); },
@@ -446,6 +448,8 @@ function bindEvents(): void {
   // Contrôles vidéo (navigation sur frames uniques)
   el.btnPrevFrame.addEventListener('click', () => void goToPreviousUniqueFrame());
   el.btnNextFrame.addEventListener('click', () => void goToNextUniqueFrame());
+  el.btnPrev10.addEventListener('click', () => videoPlayer?.jumpFrames(-10));
+  el.btnNext10.addEventListener('click', () => videoPlayer?.jumpFrames(10));
   el.btnPlayPause.addEventListener('click', togglePlayPause);
   el.btnZoom.addEventListener('click', () => {
     el.videoWrapper.classList.toggle('zoomed');
@@ -510,8 +514,10 @@ function bindEvents(): void {
     // Ignorer si l'utilisateur tape dans un champ
     const target = e.target as HTMLElement;
     if (target.tagName === 'INPUT' || target.tagName === 'SELECT' || target.tagName === 'TEXTAREA') return;
-    if (e.key === 'ArrowLeft') void goToPreviousUniqueFrame();
-    if (e.key === 'ArrowRight') void goToNextUniqueFrame();
+    if (e.key === 'ArrowLeft' && !e.shiftKey) void goToPreviousUniqueFrame();
+    if (e.key === 'ArrowRight' && !e.shiftKey) void goToNextUniqueFrame();
+    if (e.key === 'ArrowLeft' && e.shiftKey) videoPlayer?.jumpFrames(-10);
+    if (e.key === 'ArrowRight' && e.shiftKey) videoPlayer?.jumpFrames(10);
     if (e.key === ' ') {
       e.preventDefault();
       togglePlayPause();
@@ -658,6 +664,8 @@ async function handleVideoUpload(file: File): Promise<void> {
 function setNavigationEnabled(enabled: boolean): void {
   el.btnPrevFrame.disabled = !enabled;
   el.btnNextFrame.disabled = !enabled;
+  el.btnPrev10.disabled = !enabled;
+  el.btnNext10.disabled = !enabled;
   if (!enabled) {
     el.frameCounter.textContent = 'Frame — / —';
   }

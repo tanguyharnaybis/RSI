@@ -464,6 +464,21 @@ export class FrameByFramePlayer implements VideoPlayer {
     return this.metadata;
   }
 
+  /**
+   * Saute de N frames d'un coup (saut direct, instantané — contrairement
+   * à la navigation frame par frame qui vérifie chaque image). Le pas est
+   * multiplié par le facteur de duplication estimé : dans un fichier où
+   * chaque image est dupliquée ×N, « 10 frames » déplace de 10 images
+   * réelles, pas de 10 samples identiques.
+   * @param delta - Nombre de frames (négatif pour reculer)
+   */
+  jumpFrames(delta: number): void {
+    const frames = Math.max(1, Math.abs(Math.round(delta))) * Math.max(1, this.duplicationHint);
+    const sign = delta < 0 ? -1 : 1;
+    const target = this.currentFrame + sign * frames;
+    this.goToFrame(target);
+  }
+
   // ============================================
   // Navigation sur frames uniques (anti-duplication)
   // ============================================
