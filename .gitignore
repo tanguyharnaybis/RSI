@@ -38,3 +38,8 @@ temp/
 public/ffmpeg/
 public/mediapipe/wasm/
 lab-videos/
+# Labo de détection : vidéo test et sorties jamais commités
+detection_auto_test/*.mp4
+detection_auto_test/*.png
+detection_auto_test/*.json
+detection_auto_test/vignettes/

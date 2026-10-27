@@ -1,0 +1,4 @@
+# Dépendances du labo de détection (Python 3.12)
+# numpy, matplotlib et Pillow sont déjà installés sur ce PC ;
+# imageio-ffmpeg fournit un binaire ffmpeg statique (pas d'installation système).
+imageio-ffmpeg
