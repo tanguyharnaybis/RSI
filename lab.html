@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>RSI Calc — Labo de détection (développement)</title>
+  <style>
+    :root {
+      --bg: #0f1629;
+      --bg-secondary: #1a2340;
+      --border: #2a3555;
+      --text: #e8eaf2;
+      --text-secondary: #9aa1b5;
+      --primary: #e94560;
+      --success: #2ecc71;
+      --warning: #e6a23c;
+      --info: #4d9fff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 16px;
+    }
+    h1 { font-size: 1.3rem; margin: 0 0 4px; }
+    h2 { font-size: 1rem; margin: 18px 0 8px; color: var(--info); }
+    .subtitle { color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 12px; }
+    .card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px;
+      margin-bottom: 14px;
+    }
+    button {
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 14px;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    button.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+    button:disabled { opacity: 0.5; cursor: default; }
+    input, select {
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 6px 8px;
+      font-size: 0.9rem;
+    }
+    .param-grid { display: flex; flex-wrap: wrap; gap: 12px; }
+    .param { display: flex; flex-direction: column; gap: 4px; }
+    .param label { font-size: 0.75rem; color: var(--text-secondary); }
+    .param input { width: 110px; }
+    .hint { color: var(--text-secondary); font-size: 0.8rem; }
+    .status { color: var(--info); font-size: 0.85rem; min-height: 1.2em; margin: 8px 0; }
+    .progress {
+      height: 8px; background: var(--bg);
+      border-radius: 999px; overflow: hidden; margin: 6px 0;
+    }
+    .progress > div { height: 100%; background: var(--primary); width: 0%; transition: width 0.2s; }
+    .video-zone { position: relative; background: #000; border-radius: 10px; overflow: hidden; max-width: 480px; }
+    .video-zone video { width: 100%; display: block; }
+    #lab-overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+    .chart-wrap { position: relative; }
+    #lab-chart, #lab-chart-cursor {
+      width: 100%; height: 260px; display: block;
+      border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
+    }
+    #lab-chart-cursor { position: absolute; inset: 0; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    th, td { text-align: left; padding: 4px 6px; border-bottom: 1px solid var(--border); }
+    th { color: var(--text-secondary); font-weight: 600; }
+    tr.clickable { cursor: pointer; }
+    tr.clickable:hover { background: rgba(77, 159, 255, 0.08); }
+    .warning-text { color: var(--warning); }
+    .controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    .dropzone {
+      border: 2px dashed var(--border);
+      border-radius: 10px;
+      padding: 24px;
+      text-align: center;
+      cursor: pointer;
+    }
+    .dropzone.drag { border-color: var(--primary); }
+    .layout { display: flex; gap: 16px; flex-wrap: wrap; align-items: flex-start; }
+    .layout > .col { flex: 1; min-width: 320px; }
+  </style>
+</head>
+<body>
+  <h1>RSI Calc — Labo de détection</h1>
+  <p class="subtitle">
+    Page de développement (non déployée). Importez une vidéo test, visualisez la détection,
+    réglez les paramètres, puis exportez le diagnostic. La PWA n'est pas modifiée.
+  </p>
+
+  <!-- 1. Import -->
+  <div class="card">
+    <div class="dropzone" id="dropzone">
+      <strong>Déposez la vidéo test ici</strong> (ou cliquez)<br>
+      <span class="hint">La vidéo reste sur votre PC — rien n'est envoyé ni déployé.</span>
+    </div>
+    <input type="file" id="file-input" accept="video/*" hidden>
+    <div class="status" id="status-index"></div>
+    <div class="progress" id="progress-index" style="display:none"><div></div></div>
+  </div>
+
+  <!-- 2. Paramètres + pipeline -->
+  <div class="card" id="pipeline-card" style="display:none">
+    <h2 style="margin-top:0">Paramètres de détection</h2>
+    <div class="param-grid">
+      <div class="param">
+        <label>FPS d'enregistrement</label>
+        <input type="number" id="p-fps" value="240" min="1" max="1000">
+      </div>
+      <div class="param">
+        <label>Fenêtre lissage (frames, impair)</label>
+        <input type="number" id="p-smooth" value="5" min="1" max="31" step="2">
+      </div>
+      <div class="param">
+        <label>Fenêtre ligne de sol (s)</label>
+        <input type="number" id="p-ground" value="2" min="0.5" max="10" step="0.5">
+      </div>
+      <div class="param">
+        <label>Facteur epsilon</label>
+        <input type="number" id="p-eps" value="1" min="0.1" max="10" step="0.1">
+      </div>
+      <div class="param">
+        <label>Seuil vitesse décollage (y/frame)</label>
+        <input type="number" id="p-vel" value="0.0005" min="0" max="0.01" step="0.0001">
+      </div>
+      <div class="param">
+        <label>Critère d'arrêt au contact</label>
+        <select id="p-settling">
+          <option value="1" selected>Requis (défaut PWA)</option>
+          <option value="0">Non requis (test)</option>
+        </select>
+      </div>
+      <div class="param">
+        <label>Contact min (ms)</label>
+        <input type="number" id="p-cmin" value="80" min="0" max="1000">
+      </div>
+      <div class="param">
+        <label>Contact max (ms)</label>
+        <input type="number" id="p-cmax" value="400" min="0" max="2000">
+      </div>
+      <div class="param">
+        <label>Vol min (ms)</label>
+        <input type="number" id="p-fmin" value="100" min="0" max="1000">
+      </div>
+      <div class="param">
+        <label>Vol max (ms)</label>
+        <input type="number" id="p-fmax" value="600" min="0" max="2000">
+      </div>
+      <div class="param">
+        <label>Frame de départ (vide = début)</label>
+        <input type="number" id="p-start" placeholder="auto" min="1">
+      </div>
+    </div>
+    <div class="controls">
+      <button class="primary" id="btn-run">Relancer le pipeline</button>
+      <button id="btn-set-start">Départ = frame courante</button>
+      <button id="btn-clear-start">Effacer le départ</button>
+      <button id="btn-repose">Réextraire la pose (lent)</button>
+      <button id="btn-export">Télécharger le diagnostic (JSON)</button>
+    </div>
+    <div class="status" id="status-pose"></div>
+    <div class="progress" id="progress-pose" style="display:none"><div></div></div>
+  </div>
+
+  <!-- 3. Vidéo + graphique -->
+  <div class="layout">
+    <div class="col">
+      <div class="card" id="video-card" style="display:none">
+        <h2 style="margin-top:0">Vidéo + landmarks</h2>
+        <div class="video-zone">
+          <video id="video" playsinline muted loop></video>
+          <canvas id="lab-overlay"></canvas>
+        </div>
+        <div class="controls">
+          <button id="btn-prev">◀ Frame</button>
+          <button id="btn-prev10">⏪ 10</button>
+          <button id="btn-play">▶</button>
+          <button id="btn-next10">10 ⏩</button>
+          <button id="btn-next">Frame ▶</button>
+        </div>
+        <div class="status" id="frame-info">Frame — / —</div>
+      </div>
+    </div>
+    <div class="col">
+      <div class="card" id="chart-card" style="display:none">
+        <h2 style="margin-top:0">Trajectoire de la pointe (y vers le bas)</h2>
+        <div class="chart-wrap">
+          <canvas id="lab-chart"></canvas>
+          <canvas id="lab-chart-cursor"></canvas>
+        </div>
+        <p class="hint">
+          Gris = trajectoire brute · bleu = lissée · orange = ligne de sol ·
+          pointillé = seuil (sol − epsilon) · vert = premier contact · rouge = décollage ·
+          bande verte = contact · bande bleue = vol. Cliquez/glissez sur le graphique
+          pour naviguer.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- 4. Résultats -->
+  <div class="card" id="results-card" style="display:none">
+    <h2 style="margin-top:0">Sauts reconstruits</h2>
+    <div id="jumps-summary" class="status"></div>
+    <table id="jumps-table"></table>
+    <h2>Événements détectés</h2>
+    <table id="events-table"></table>
+    <div id="rejected-list"></div>
+  </div>
+
+  <script type="module" src="/src/lab/main.ts"></script>
+</body>
+</html>

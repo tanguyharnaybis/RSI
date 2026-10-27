@@ -201,6 +201,13 @@ export interface EventDetectionOptions {
   velocityThreshold?: number;
   /** Visibilités des landmarks par frame (pour la traçabilité) */
   visibility?: Float64Array;
+  /**
+   * Exiger que la descente s'arrête pour valider un premier contact
+   * (true par défaut). Passer à false dans le labo de détection : en pogo
+   * la pointe rebondit sans s'arrêter, et ce critère peut faire rater
+   * un atterrissage — ce qui saute alors un contact entier.
+   */
+  requireSettling?: boolean;
 }
 
 /**
@@ -217,6 +224,7 @@ export function detectFootEvents(
 ): FootEvent[] {
   const events: FootEvent[] = [];
   const velocityThreshold = options.velocityThreshold ?? 0.0005;
+  const requireSettling = options.requireSettling ?? true;
   const visibility = options.visibility;
 
   if (smoothY.length < 4) return events;
@@ -230,11 +238,11 @@ export function detectFootEvents(
     if (!inContact && atGround && !prevAtGround) {
       // Croisement descendant : PREMIER CONTACT
       // La descente doit s'arrêter (vitesse s'annule/inverse) : vérifiée
-      // sur la frame suivante si disponible
+      // sur la frame suivante si disponible — désactivable (labo)
       const settling =
         i + 1 >= smoothY.length ||
         smoothY[i + 1] - smoothY[i] <= Math.abs(smoothY[i] - smoothY[i - 1]);
-      if (settling) {
+      if (!requireSettling || settling) {
         const time = interpolateCrossingTime(times, smoothY, i, threshold);
         events.push({
           type: 'first-contact',

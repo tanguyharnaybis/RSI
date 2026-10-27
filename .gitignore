@@ -37,3 +37,4 @@ temp/
 *.tmp
 public/ffmpeg/
 public/mediapipe/wasm/
+lab-videos/

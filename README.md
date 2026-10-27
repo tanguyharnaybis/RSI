@@ -26,8 +26,7 @@
   - **RSI modifié** = hauteur / temps_total
 - Affichage des résultats en temps réel
 
-### 🤖 Détection automatique par pose IA (MediaPipe)
-- Pipeline **MediaPipe Pose** (`@mediapipe/tasks-vision`, modèle
+### 🤖 Détection automatique par pose IA (MediaPipe)- Pipeline **MediaPipe Pose** (`@mediapipe/tasks-vision`, modèle
   `pose_landmarker_full.task` servi localement — aucun appel réseau externe) :
   - landmarks du pied extraits frame par frame : chevilles (27/28), talons
     (29/30), pointes (31/32) — en pogo jump, la pointe est le premier et le
@@ -78,6 +77,31 @@
 - Checklist du protocole de mesure
 - Conseils pour obtenir des résultats précis
 - Recommandations sur la configuration du smartphone
+
+## 🧪 Labo de détection (développement uniquement)
+
+Le fichier **`lab.html`** (page de développement, **non incluse dans le build
+ni déployée**) permet d'expérimenter sur la précision de la détection avec une
+vidéo test locale avant d'intégrer les changements dans la PWA :
+
+```bash
+npm run dev
+# puis ouvrir http://localhost:3000/lab.html
+```
+
+- import d'une vidéo test (elle reste sur votre PC — rien n'est envoyé ni déployé ;
+  vous pouvez la ranger dans `lab-videos/`, ignoré par git) ;
+- visualisation complète : trajectoire de la pointe (brute et lissée), ligne de
+  sol, seuil sol − epsilon, événements (premiers contacts / décollages), phases
+  contact/vol, landmarks du pied superposés à la vidéo ;
+- **paramètres réglables en direct** (recalcul instantané sans réextraire la
+  pose) : fenêtre de lissage, fenêtre de ligne de sol, facteur epsilon, seuil
+  de vitesse du décollage, critère d'arrêt au contact (activable/désactivable),
+  bornes contact/vol, frame de départ ;
+- tableaux des sauts reconstruits (contact, vol, hauteur, RSI, avertissements)
+  et des événements (cliquables pour se positionner sur la frame) ;
+- **export d'un diagnostic JSON** (paramètres + événements + sauts +
+  trajectoires) à transmettre pour ajuster l'algorithme.
 
 ## 📦 Structure du Projet
 
