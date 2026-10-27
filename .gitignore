@@ -43,3 +43,4 @@ detection_auto_test/*.mp4
 detection_auto_test/*.png
 detection_auto_test/*.json
 detection_auto_test/vignettes/
+detection_auto_test/*.npz
