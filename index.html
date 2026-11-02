@@ -217,23 +217,24 @@
     .labeling-controls-wrap .video-controls { margin-top: 0; }
     #labeling-widget {
       position: absolute;
-      top: 64px;
-      right: 14px;
-      width: min(320px, calc(100vw - 28px));
-      max-height: calc(100vh - 200px);
+      top: 56px;
+      right: 10px;
+      width: min(210px, calc(100vw - 20px));
+      max-height: calc(100vh - 170px);
       overflow-y: auto;
       background: var(--bg-secondary);
       border: 1px solid var(--border);
-      border-radius: 14px;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+      border-radius: 12px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
       z-index: 10;
       touch-action: none;
     }
     #labeling-widget-handle {
       display: flex;
       align-items: center;
-      gap: 8px;
-      padding: 10px 14px;
+      gap: 6px;
+      padding: 6px 10px;
+      font-size: 0.85rem;
       font-weight: 600;
       cursor: grab;
       user-select: none;
@@ -241,25 +242,31 @@
       touch-action: none;
     }
     #labeling-widget-handle:active { cursor: grabbing; }
-    #labeling-widget-body { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
-    #labeling-widget-body .button-grid { margin: 0; }
-    #labeling-widget-body .marker-chip { flex: 1; text-align: center; }
+    #labeling-widget-body { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+    #labeling-widget-body .btn { min-height: 34px; padding: 4px 8px; font-size: 0.85rem; }
+    #labeling-widget-body .button-grid { margin: 0; grid-template-columns: 1fr; gap: 6px; }
+    #labeling-widget-body .form-select { min-height: 32px; padding: 2px 6px; font-size: 0.85rem; }
+    #labeling-widget-body .marker-chip { padding: 2px 6px; font-size: 0.72rem; text-align: center; }
+    #labeling-widget .labeling-jumps-row { display: flex; align-items: center; gap: 6px; }
+    #labeling-widget .labeling-jumps-row .jumps-label { font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); }
     #labeling-live-metrics {
-      font-size: 0.85rem;
+      font-size: 0.72rem;
       font-weight: 600;
       color: var(--primary);
-      min-height: 1.2em;
+      min-height: 1.1em;
     }
     .labeling-chain-row {
       display: flex;
       align-items: center;
-      gap: 8px;
-      font-size: 0.85rem;
+      gap: 6px;
+      font-size: 0.75rem;
       color: var(--text-secondary);
       cursor: pointer;
       user-select: none;
     }
-    .labeling-chain-row input { min-width: 18px; min-height: 18px; }
+    .labeling-chain-row input { min-width: 16px; min-height: 16px; }
+    #labeling-widget .labeling-shortcuts { margin: 0; font-size: 0.68rem; }
+    @media (hover: none) { #labeling-widget .labeling-shortcuts { display: none; } }
 
     .video-controls {
       display: flex;
@@ -723,8 +730,8 @@
     <div id="labeling-widget">
       <div id="labeling-widget-handle" title="Glisser pour déplacer">⠿ Marquage</div>
       <div id="labeling-widget-body">
-        <div class="form-group">
-          <label for="jump-count">Sauts à mesurer</label>
+        <div class="labeling-jumps-row">
+          <span class="jumps-label">Sauts</span>
           <span id="labeling-jump-slot"></span>
         </div>
         <label class="labeling-chain-row" title="L'atterrissage final du saut validé devient l'atterrissage du saut suivant (pogo jumps)">
@@ -732,9 +739,9 @@
           Contact partagé (pogo)
         </label>
         <span id="labeling-mark-slot" style="display:block"></span>
-        <span id="labeling-chips-slot" style="display:flex; flex-wrap:wrap; gap:8px"></span>
+        <span id="labeling-chips-slot" style="display:flex; flex-direction:column; gap:4px"></span>
         <div id="labeling-live-metrics" aria-live="polite"></div>
-        <p class="hint" style="margin:0">Raccourcis : <strong>1 / 2 / 3</strong> marquer · <strong>Entrée</strong> valider · <strong>← / →</strong> frame · <strong>Échap</strong> fermer</p>
+        <p class="hint labeling-shortcuts">1/2/3 marquer · Entrée valider · ←/→ frame · Échap fermer</p>
         <span id="labeling-calc-slot" style="display:block"></span>
       </div>
     </div>
