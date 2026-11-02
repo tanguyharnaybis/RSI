@@ -247,7 +247,6 @@ describe('validateTrial', () => {
         flightTime: 0.2,
         height: 0.1,
         rsi: 1.0,
-        modifiedRsi: 0.5,
         totalTime: 0.3,
       },
       formattedResult: {
@@ -255,7 +254,6 @@ describe('validateTrial', () => {
         flightTimeMs: 200,
         heightCm: 10,
         rsi: 1.0,
-        modifiedRsi: 0.5,
       },
       metadata: {
         fps: 240,
@@ -273,7 +271,6 @@ describe('validateTrial', () => {
         flightTimeMs: 200,
         heightCm: 10,
         rsi: 1.0,
-        modifiedRsi: 0.5,
       },
       metadata: {
         fps: 240,
@@ -290,7 +287,6 @@ describe('validateTrial', () => {
         flightTime: 0.2,
         height: 0.1,
         rsi: 1.0,
-        modifiedRsi: 0.5,
         totalTime: 0.3,
       },
       metadata: {
@@ -308,7 +304,6 @@ describe('validateTrial', () => {
         flightTime: 0.2,
         height: 0.1,
         rsi: 1.0,
-        modifiedRsi: 0.5,
         totalTime: 0.3,
       },
       formattedResult: {
@@ -316,7 +311,6 @@ describe('validateTrial', () => {
         flightTimeMs: 200,
         heightCm: 10,
         rsi: 1.0,
-        modifiedRsi: 0.5,
       },
       metadata: {
         fps: 0,

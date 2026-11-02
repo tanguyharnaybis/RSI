@@ -71,7 +71,6 @@ export interface RSIResult {
   flightTime: number; // en secondes
   height: number; // en mètres
   rsi: number; // en m/s
-  modifiedRsi: number; // en m/s
   totalTime: number; // en secondes
   dropHeight?: number; // en mètres (optionnel)
 }
@@ -82,7 +81,6 @@ export interface FormattedRSIResult {
   flightTimeMs: number; // en millisecondes
   heightCm: number; // en centimètres
   rsi: number;
-  modifiedRsi: number;
 }
 
 // ============================================
@@ -117,8 +115,6 @@ export interface SessionStats {
   sessionId: string;
   meanRsi: number;
   stdDevRsi: number;
-  meanModifiedRsi: number;
-  stdDevModifiedRsi: number;
   meanHeight: number;
   meanContactTime: number;
   meanFlightTime: number;

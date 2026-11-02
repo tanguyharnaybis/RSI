@@ -6,7 +6,6 @@
  * - temps de vol = (frame3 - frame2) / fps
  * - hauteur de saut = g * t_vol² / 8
  * - RSI = hauteur / temps_de_contact
- * - RSI modifié = hauteur / temps_total
  */
 
 import type { RSIResult, FormattedRSIResult } from '../types';
@@ -60,15 +59,11 @@ export function calculateRSI(
   // Calcul du RSI (hauteur / temps de contact)
   const rsi = contactTime > 0 ? height / contactTime : 0;
 
-  // Calcul du RSI modifié (hauteur / temps total)
-  const modifiedRsi = totalTime > 0 ? height / totalTime : 0;
-
   return {
     contactTime,
     flightTime,
     height,
     rsi,
-    modifiedRsi,
     totalTime,
   };
 }
@@ -108,9 +103,8 @@ export function calculateRSIFromTimestamps(
 
   const height = gravity * Math.pow(flightTime, 2) / 8;
   const rsi = contactTime > 0 ? height / contactTime : 0;
-  const modifiedRsi = totalTime > 0 ? height / totalTime : 0;
 
-  return { contactTime, flightTime, height, rsi, modifiedRsi, totalTime };
+  return { contactTime, flightTime, height, rsi, totalTime };
 }
 
 /**
@@ -124,7 +118,6 @@ export function formatRSIResult(result: RSIResult): FormattedRSIResult {
     flightTimeMs: Math.round(result.flightTime * 1000),
     heightCm: Math.round(result.height * 100),
     rsi: parseFloat(result.rsi.toFixed(2)),
-    modifiedRsi: parseFloat(result.modifiedRsi.toFixed(2)),
   };
 }
 

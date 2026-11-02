@@ -44,16 +44,6 @@ describe('calculateRSI', () => {
     expect(result.rsi).toBeCloseTo(0.2344, 3);
   });
 
-  it('devrait calculer le RSI modifié', () => {
-    const result = calculateRSI(100, 120, 150, 240);
-    
-    // RSI modifié = hauteur / temps_total
-    // temps_total = 0.0833 + 0.125 = 0.2083
-    // RSI modifié = 0.01914 / 0.2083 = 0.0919m/s
-    
-    expect(result.modifiedRsi).toBeCloseTo(0.0919, 3);
-  });
-
   it('devrait lancer une erreur si les frames ne sont pas dans l\'ordre', () => {
     expect(() => calculateRSI(120, 100, 150, 240))
       .toThrow('Le frame d\'atterrissage doit être avant le frame de décollage');
@@ -99,7 +89,6 @@ describe('calculateRSIFromTimestamps (méthode VFR-exact)', () => {
     expect(byTimestamps.flightTime).toBeCloseTo(byFrames.flightTime, 10);
     expect(byTimestamps.height).toBeCloseTo(byFrames.height, 10);
     expect(byTimestamps.rsi).toBeCloseTo(byFrames.rsi, 10);
-    expect(byTimestamps.modifiedRsi).toBeCloseTo(byFrames.modifiedRsi, 10);
   });
 
   it('devrait gérer une cadence variable (VFR) : intervalles irréguliers', () => {
@@ -127,7 +116,6 @@ describe('formatRSIResult', () => {
       flightTime: 0.125,
       height: 0.01914,
       rsi: 0.23,
-      modifiedRsi: 0.0919,
       totalTime: 0.2083,
     };
     
@@ -137,7 +125,6 @@ describe('formatRSIResult', () => {
     expect(formatted.flightTimeMs).toBe(125);
     expect(formatted.heightCm).toBe(2);
     expect(formatted.rsi).toBe(0.23);
-    expect(formatted.modifiedRsi).toBe(0.09);
   });
 
   it('devrait arrondir correctement les valeurs', () => {
@@ -146,7 +133,6 @@ describe('formatRSIResult', () => {
       flightTime: 0.2,
       height: 0.123456,
       rsi: 1.234567,
-      modifiedRsi: 0.987654,
       totalTime: 0.3,
     };
     
@@ -156,7 +142,6 @@ describe('formatRSIResult', () => {
     expect(formatted.flightTimeMs).toBe(200);
     expect(formatted.heightCm).toBe(12);
     expect(formatted.rsi).toBe(1.23);
-    expect(formatted.modifiedRsi).toBe(0.99);
   });
 });
 

@@ -11,7 +11,6 @@ import type { Session, SessionStats } from '../types';
  */
 export function calculateSessionStats(session: Session): SessionStats {
   const rsiValues = session.trials.map(t => t.formattedResult.rsi);
-  const modifiedRsiValues = session.trials.map(t => t.formattedResult.modifiedRsi);
   const heightValues = session.trials.map(t => t.formattedResult.heightCm);
   const contactTimeValues = session.trials.map(t => t.formattedResult.contactTimeMs);
   const flightTimeValues = session.trials.map(t => t.formattedResult.flightTimeMs);
@@ -20,8 +19,6 @@ export function calculateSessionStats(session: Session): SessionStats {
     sessionId: session.id,
     meanRsi: 0,
     stdDevRsi: 0,
-    meanModifiedRsi: 0,
-    stdDevModifiedRsi: 0,
     meanHeight: 0,
     meanContactTime: 0,
     meanFlightTime: 0,
@@ -31,11 +28,6 @@ export function calculateSessionStats(session: Session): SessionStats {
   if (rsiValues.length > 0) {
     stats.meanRsi = parseFloat((rsiValues.reduce((sum, r) => sum + r, 0) / rsiValues.length).toFixed(2));
     stats.stdDevRsi = parseFloat(calculateStdDev(rsiValues).toFixed(2));
-  }
-
-  if (modifiedRsiValues.length > 0) {
-    stats.meanModifiedRsi = parseFloat((modifiedRsiValues.reduce((sum, r) => sum + r, 0) / modifiedRsiValues.length).toFixed(2));
-    stats.stdDevModifiedRsi = parseFloat(calculateStdDev(modifiedRsiValues).toFixed(2));
   }
 
   if (heightValues.length > 0) {
@@ -72,7 +64,6 @@ function calculateStdDev(values: number[]): number {
  */
 export function calculateGlobalStats(sessions: Session[]) {
   const allRsi: number[] = [];
-  const allModifiedRsi: number[] = [];
   const allHeights: number[] = [];
   const sessionStats: SessionStats[] = [];
 
@@ -81,7 +72,6 @@ export function calculateGlobalStats(sessions: Session[]) {
     sessionStats.push(stats);
     
     allRsi.push(...session.trials.map(t => t.formattedResult.rsi));
-    allModifiedRsi.push(...session.trials.map(t => t.formattedResult.modifiedRsi));
     allHeights.push(...session.trials.map(t => t.formattedResult.heightCm));
   });
 
@@ -91,7 +81,6 @@ export function calculateGlobalStats(sessions: Session[]) {
     totalSessions: sessions.length,
     totalTrials,
     averageRsi: allRsi.length > 0 ? parseFloat((allRsi.reduce((sum, r) => sum + r, 0) / allRsi.length).toFixed(2)) : 0,
-    averageModifiedRsi: allModifiedRsi.length > 0 ? parseFloat((allModifiedRsi.reduce((sum, r) => sum + r, 0) / allModifiedRsi.length).toFixed(2)) : 0,
     averageHeight: allHeights.length > 0 ? parseFloat((allHeights.reduce((sum, h) => sum + h, 0) / allHeights.length).toFixed(2)) : 0,
     bestSession: sessionStats.length > 0 ? sessionStats.reduce((best, current) => 
       current.meanRsi > best.meanRsi ? current : best
@@ -111,7 +100,6 @@ export function getProgressChartData(sessions: Session[]) {
 
   const labels: string[] = [];
   const rsiData: number[] = [];
-  const modifiedRsiData: number[] = [];
   const heightData: number[] = [];
   const contactTimeData: number[] = [];
   const flightTimeData: number[] = [];
@@ -121,7 +109,6 @@ export function getProgressChartData(sessions: Session[]) {
     
     labels.push(session.date);
     rsiData.push(stats.meanRsi);
-    modifiedRsiData.push(stats.meanModifiedRsi);
     heightData.push(stats.meanHeight);
     contactTimeData.push(stats.meanContactTime);
     flightTimeData.push(stats.meanFlightTime);
@@ -131,7 +118,6 @@ export function getProgressChartData(sessions: Session[]) {
     labels,
     datasets: {
       rsi: rsiData,
-      modifiedRsi: modifiedRsiData,
       height: heightData,
       contactTime: contactTimeData,
       flightTime: flightTimeData,
@@ -142,10 +128,9 @@ export function getProgressChartData(sessions: Session[]) {
 /**
  * Calcule la tendance (amélioration ou dégradation) sur les sessions
  * @param sessions - Sessions à analyser
- * @param metric - Métrique à analyser ('rsi' ou 'modifiedRsi')
  * @returns Tendance (positive, négative ou nulle)
  */
-export function calculateTrend(sessions: Session[], metric: 'rsi' | 'modifiedRsi' = 'rsi'): {
+export function calculateTrend(sessions: Session[]): {
   trend: 'improving' | 'declining' | 'stable';
   change: number;
   percentage: number;
@@ -160,13 +145,8 @@ export function calculateTrend(sessions: Session[], metric: 'rsi' | 'modifiedRsi
   const firstSession = sortedSessions[0];
   const lastSession = sortedSessions[sortedSessions.length - 1];
 
-  const firstValue = metric === 'rsi' ? 
-    calculateSessionStats(firstSession).meanRsi : 
-    calculateSessionStats(firstSession).meanModifiedRsi;
-
-  const lastValue = metric === 'rsi' ? 
-    calculateSessionStats(lastSession).meanRsi : 
-    calculateSessionStats(lastSession).meanModifiedRsi;
+  const firstValue = calculateSessionStats(firstSession).meanRsi;
+  const lastValue = calculateSessionStats(lastSession).meanRsi;
 
   const change = lastValue - firstValue;
   const percentage = firstValue !== 0 ? (change / firstValue) * 100 : 0;
@@ -190,7 +170,6 @@ export function getTrialStats(session: Session) {
     trialId: trial.id,
     trialNumber: session.trials.indexOf(trial) + 1,
     rsi: trial.formattedResult.rsi,
-    modifiedRsi: trial.formattedResult.modifiedRsi,
     height: trial.formattedResult.heightCm,
     contactTime: trial.formattedResult.contactTimeMs,
     flightTime: trial.formattedResult.flightTimeMs,

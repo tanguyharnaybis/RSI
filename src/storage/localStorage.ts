@@ -294,8 +294,8 @@ export class LocalStorageService implements StorageService {
     const csv: string[] = [];
     
     // En-tête
-    csv.push(['Session', 'Date', 'Hauteur Drop (cm)', 'Essai #', 'Temps Contact (ms)', 'Temps Vol (ms)', 'Hauteur (cm)', 'RSI', 'RSI Modifié'].join(';'));
-    
+    csv.push(['Session', 'Date', 'Hauteur Drop (cm)', 'Essai #', 'Temps Contact (ms)', 'Temps Vol (ms)', 'Hauteur (cm)', 'RSI'].join(';'));
+
     // Données
     sessions.forEach(session => {
       session.trials.forEach((trial, index) => {
@@ -308,7 +308,6 @@ export class LocalStorageService implements StorageService {
           trial.formattedResult.flightTimeMs,
           trial.formattedResult.heightCm,
           trial.formattedResult.rsi,
-          trial.formattedResult.modifiedRsi,
         ].join(';'));
       });
     });
@@ -330,8 +329,8 @@ export class LocalStorageService implements StorageService {
     const csv: string[] = [];
     
     // En-tête
-    csv.push(['Essai #', 'Temps Contact (ms)', 'Temps Vol (ms)', 'Hauteur (cm)', 'RSI', 'RSI Modifié'].join(';'));
-    
+    csv.push(['Essai #', 'Temps Contact (ms)', 'Temps Vol (ms)', 'Hauteur (cm)', 'RSI'].join(';'));
+
     // Données
     session.trials.forEach((trial, index) => {
       csv.push([
@@ -340,7 +339,6 @@ export class LocalStorageService implements StorageService {
         trial.formattedResult.flightTimeMs,
         trial.formattedResult.heightCm,
         trial.formattedResult.rsi,
-        trial.formattedResult.modifiedRsi,
       ].join(';'));
     });
     

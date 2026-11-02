@@ -212,7 +212,6 @@ export function validateTrial(trial: Partial<Trial>): boolean {
  */
 export function getSessionStats(session: Session) {
   const rsiValues = session.trials.map(t => t.formattedResult.rsi);
-  const modifiedRsiValues = session.trials.map(t => t.formattedResult.modifiedRsi);
   const heightValues = session.trials.map(t => t.formattedResult.heightCm);
   const contactTimeValues = session.trials.map(t => t.formattedResult.contactTimeMs);
   const flightTimeValues = session.trials.map(t => t.formattedResult.flightTimeMs);
@@ -220,10 +219,6 @@ export function getSessionStats(session: Session) {
   // Calculer les moyennes
   const meanRsi = rsiValues.length > 0 
     ? rsiValues.reduce((sum, r) => sum + r, 0) / rsiValues.length
-    : 0;
-  
-  const meanModifiedRsi = modifiedRsiValues.length > 0
-    ? modifiedRsiValues.reduce((sum, r) => sum + r, 0) / modifiedRsiValues.length
     : 0;
   
   const meanHeight = heightValues.length > 0
@@ -250,8 +245,6 @@ export function getSessionStats(session: Session) {
     sessionId: session.id,
     meanRsi: parseFloat(meanRsi.toFixed(2)),
     stdDevRsi: parseFloat(calculateStdDev(rsiValues).toFixed(2)),
-    meanModifiedRsi: parseFloat(meanModifiedRsi.toFixed(2)),
-    stdDevModifiedRsi: parseFloat(calculateStdDev(modifiedRsiValues).toFixed(2)),
     meanHeight: parseFloat(meanHeight.toFixed(2)),
     meanContactTime: parseFloat(meanContactTime.toFixed(2)),
     meanFlightTime: parseFloat(meanFlightTime.toFixed(2)),

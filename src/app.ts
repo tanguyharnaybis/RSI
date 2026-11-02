@@ -41,7 +41,7 @@ let currentSession: Session | null = null;
 
 /** Un saut validé de la série en cours */
 interface JumpMeasurement {
-  formatted: { contactTimeMs: number; flightTimeMs: number; heightCm: number; rsi: number; modifiedRsi: number };
+  formatted: { contactTimeMs: number; flightTimeMs: number; heightCm: number; rsi: number };
   markers: MarkerPoints;
   times: { landing: number; takeoff: number; finalLanding: number } | null;
   timeSourceLabel: string;
@@ -1647,15 +1647,6 @@ function updateChart(): void {
           data: chartData.datasets.rsi,
           borderColor: '#e94560',
           backgroundColor: 'rgba(233, 69, 96, 0.15)',
-          fill: true,
-          tension: 0.35,
-          spanGaps: true,
-        },
-        {
-          label: 'RSI modifié moyen (m/s)',
-          data: chartData.datasets.modifiedRsi,
-          borderColor: '#4d9fff',
-          backgroundColor: 'rgba(77, 159, 255, 0.12)',
           fill: true,
           tension: 0.35,
           spanGaps: true,
