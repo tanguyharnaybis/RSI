@@ -15,6 +15,11 @@
  *    Le FPS d'enregistrement saisi est alors requis pour le facteur
  *    (étirement = fps saisi / fps conteneur). La source est signalée.
  *
+ *  - Cadence CONFIRMÉE par l'utilisateur (panneau de vérification après
+ *    l'analyse) : le rapport cadence déclarée / cadence conteneur fixe
+ *    le facteur d'étirement, quel que soit le conteneur — corrige le cas
+ *    d'une capture 240 fps exportée à 120 fps (étirement ×2).
+ *
  * Dans tous les cas, l'interface affiche quelle donnée est utilisée.
  */
 
@@ -41,11 +46,15 @@ const MIN_CAPTURE_FPS = 100;
  * @param containerFps - Cadence du conteneur (1 / intervalle médian, 0 si inconnue)
  * @param duplicationConfirmed - Facteur de duplication confirmé (≥ 1)
  * @param manualFps - FPS d'enregistrement saisi
+ * @param confirmed - Cadence confirmée par l'utilisateur (après analyse) :
+ *                    le rapport saisi/conteneur fixe le facteur d'étirement,
+ *                    quel que soit le conteneur.
  */
 export function determineTimeFactor(
   containerFps: number,
   duplicationConfirmed: number,
-  manualFps: number
+  manualFps: number,
+  confirmed = false
 ): TimeFactor {
   const duplication = Math.max(1, duplicationConfirmed);
 
@@ -58,7 +67,32 @@ export function determineTimeFactor(
     };
   }
 
-  // Conteneur à cadence de capture : timestamps seuls suffisent
+  // Cadence CONFIRMÉE par l'utilisateur : le facteur d'étirement vient du
+  // rapport cadence déclarée / cadence du conteneur — y compris pour un
+  // conteneur rapide (ex. capture 240 fps exportée à 120 fps → ×2).
+  if (confirmed) {
+    const stretch = Math.max(1, Math.round(manualFps / containerFps));
+    const factor = stretch * duplication;
+    if (stretch <= 1) {
+      return {
+        factor,
+        source: 'timestamps',
+        label:
+          `timestamps exacts — cadence confirmée ${manualFps} fps` +
+          (duplication > 1 ? ` (duplication ×${duplication})` : ''),
+      };
+    }
+    return {
+      factor,
+      source: 'manual-fps',
+      label:
+        `cadence confirmée ${manualFps} fps — export étiré ×${stretch}` +
+        (duplication > 1 ? ` (dont duplication ×${duplication})` : ''),
+    };
+  }
+
+  // Sans confirmation : comportement automatique — conteneur à cadence de
+  // capture (≥ 100 fps), timestamps seuls suffisent.
   if (containerFps >= MIN_CAPTURE_FPS) {
     if (duplication > 1) {
       return {

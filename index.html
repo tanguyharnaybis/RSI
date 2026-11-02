@@ -270,6 +270,7 @@
     @media (hover: none) { #labeling-widget .labeling-shortcuts { display: none; } }
     /* Rangées compactes dans le widget : marquage, chips et actions */
     #labeling-widget #mark-buttons { margin: 0; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+    #labeling-widget #mark-buttons .btn { white-space: nowrap; padding: 4px 2px; }
     #labeling-widget #marker-status { display: flex; flex-wrap: wrap; gap: 4px; }
     #labeling-widget #marker-status .marker-chip { flex: 1; }
     #labeling-widget #calculate-group { display: flex; gap: 6px; }
@@ -568,6 +569,21 @@
             <div class="timeline-thumb" id="timeline-thumb"></div>
           </div>
           <div class="hint" id="video-info"></div>
+
+          <!-- Vérification de la cadence d'enregistrement (après analyse) -->
+          <div id="fps-confirm-panel" style="display:none; margin-top:10px; padding:12px; border:1px solid var(--warning, #e6a23c); border-radius:10px; background:var(--bg-secondary)">
+            <div class="hint" style="font-weight:700; color:var(--warning, #e6a23c)">Vérification de la cadence d'enregistrement</div>
+            <p class="hint" style="margin:6px 0 8px">
+              Le conteneur vidéo indique <strong id="fps-confirm-container">—</strong> fps.
+              Confirmez cette cadence, ou corrigez-la si la vidéo a été filmée à une autre
+              cadence (ex. slow-motion 240 fps) — les temps réels et le RSI en dépendent.
+            </p>
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap">
+              <input type="number" id="fps-confirm-input" min="1" max="1000" step="1" inputmode="numeric"
+                     style="min-height:44px; width:110px; border-radius:10px; background:var(--bg-tertiary); color:var(--text-primary); border:1px solid var(--border); padding:6px 10px; font-size:1rem">
+              <button id="btn-fps-confirm" class="btn btn-primary">Confirmer la cadence</button>
+            </div>
+          </div>
         </div>
 
         <div class="timeline-wrap" style="margin-top:8px">
@@ -594,11 +610,12 @@
         </div>
       </div>
       <p class="hint">
-        Le <strong>FPS d'enregistrement</strong> est utilisé <strong>uniquement</strong> quand la vidéo a été
-        exportée à cadence lente (ex. 30 fps) : la cadence de capture y est absente du fichier et la saisie
-        est requise pour le facteur d'étirement. Pour une vidéo à sa cadence de capture (fichier iPhone
-        original à 240 fps), les timestamps exacts suffisent : cette valeur est <strong>ignorée</strong>.
-        La ligne d'information sous la vidéo et les résultats indiquent toujours la source utilisée.
+        Après l'analyse de la vidéo, un <strong>panneau de vérification</strong> vous demande de
+        confirmer la cadence d'enregistrement détectée dans le fichier — ou de la corriger
+        (ex. slow-motion filmé à 240 fps dans un fichier qui indique 120). La cadence
+        confirmée sert à convertir les timestamps exacts en temps réels. Sans confirmation
+        (conteneur ≥ 100 fps), les timestamps seuls sont présumés suffisants. La ligne
+        d'information sous la vidéo et les résultats indiquent toujours la source utilisée.
       </p>
     </section>
 
@@ -620,7 +637,7 @@
       <div class="button-grid" id="mark-buttons">
         <button id="btn-mark-landing" class="btn btn-success">1. Atterrissage</button>
         <button id="btn-mark-takeoff" class="btn btn-warning">2. Décollage</button>
-        <button id="btn-mark-final-landing" class="btn btn-danger span-2">3. Atterrissage final</button>
+        <button id="btn-mark-final-landing" class="btn btn-danger span-2">3. Atterr. final</button>
       </div>
       <div id="marker-status">
         <span class="marker-chip" id="chip-landing">Atterrissage : —</span>

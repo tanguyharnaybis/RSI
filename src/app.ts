@@ -57,6 +57,13 @@ let referenceFrame: number | null = null;
  * 1 par défaut ; > 1 si le fichier contient des frames identiques ×N.
  */
 let estimatedDuplication = 1;
+/**
+ * Cadence d'enregistrement confirmée par l'utilisateur (panneau de
+ * vérification après l'analyse). Tant qu'elle n'est pas confirmée, le
+ * comportement automatique s'applique ; une fois confirmée, le rapport
+ * cadence déclarée / cadence conteneur fixe le facteur d'étirement.
+ */
+let fpsConfirmed = false;
 
 const MAX_JUMPS = 15;
 const DEFAULT_BEST_COUNT = 5;
@@ -564,6 +571,11 @@ const el = {
   get playbackRate() { return $<HTMLSelectElement>('playback-rate'); },
   get frameCounter() { return $('frame-counter'); },
   get videoInfo() { return $('video-info'); },
+  // Vérification de la cadence d'enregistrement
+  get fpsConfirmPanel() { return $('fps-confirm-panel'); },
+  get fpsConfirmInput() { return $<HTMLInputElement>('fps-confirm-input'); },
+  get fpsConfirmContainer() { return $('fps-confirm-container'); },
+  get btnFpsConfirm() { return $<HTMLButtonElement>('btn-fps-confirm'); },
   get timeline() { return $('timeline'); },
   get timelineFill() { return $('timeline-fill'); },
   get timelineThumb() { return $('timeline-thumb'); },
@@ -712,6 +724,10 @@ function bindEvents(): void {
 
   // Paramètres
   el.fpsInput.addEventListener('change', () => applyFps(parseFloat(el.fpsInput.value)));
+  el.btnFpsConfirm.addEventListener('click', () => confirmFps());
+  el.fpsConfirmInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') confirmFps();
+  });
   el.gravityInput.addEventListener('change', () => {
     const g = parseFloat(el.gravityInput.value);
     gravity = clamp(Number.isFinite(g) && g > 0 ? g : 9.81, 1, 20);
@@ -962,6 +978,8 @@ async function handleVideoUpload(file: File): Promise<void> {
 
   el.btnOpenLabeling.style.display = 'none';
   el.btnReturnMarker.style.display = 'none';
+  fpsConfirmed = false;
+  hideFpsConfirmPanel();
   referenceFrame = null;
   void runFfmpegAnalysis();
 }
@@ -1023,14 +1041,55 @@ function applyFps(fps: number): void {
   if (!currentVideo) return;
 
   currentVideo.fps = valid;
-  // Le compteur de frames vient de l'index ffmpeg (jamais d'un calcul) ;
-  // le FPS d'enregistrement ne sert qu'à la conversion en temps réels
+  // Toute saisie manuelle après l'analyse vaut confirmation de la cadence
+  fpsConfirmed = true;
+  hideFpsConfirmPanel();
+  // Le FPS d'enregistrement ne sert qu'à la conversion en temps réels
   // (facteur d'étirement) et à l'affichage.
   if (videoPlayer) {
     videoPlayer.setMetadata({ fps: valid });
   }
   updateVideoInfo();
-  showAlert(`FPS d'enregistrement mis à jour : ${valid}`, 'info');
+  updateLiveMetrics();
+  showAlert(
+    `Cadence d'enregistrement confirmée : ${valid} fps — ` +
+    `source des temps : ${timeFactor().label}.`, 'success'
+  );
+}
+
+/** Affiche le panneau de vérification de la cadence (après analyse) */
+function showFpsConfirmPanel(containerFps: number): void {
+  el.fpsConfirmContainer.textContent = String(containerFps);
+  // Suggestion : la cadence du conteneur si elle ressemble à une cadence
+  // de capture, sinon la valeur saisie dans les paramètres.
+  el.fpsConfirmInput.value = String(
+    containerFps >= 100 ? Math.round(containerFps) : currentVideo?.fps ?? 240
+  );
+  el.fpsConfirmPanel.style.display = 'block';
+}
+
+/** Masque le panneau de vérification de la cadence */
+function hideFpsConfirmPanel(): void {
+  el.fpsConfirmPanel.style.display = 'none';
+}
+
+/** Confirmation utilisateur de la cadence d'enregistrement */
+function confirmFps(): void {
+  if (!currentVideo) return;
+  const fps = clamp(parseInt(el.fpsConfirmInput.value, 10) || 240, 1, 1000);
+  currentVideo.fps = fps;
+  el.fpsInput.value = String(fps);
+  if (videoPlayer) {
+    videoPlayer.setMetadata({ fps });
+  }
+  fpsConfirmed = true;
+  hideFpsConfirmPanel();
+  updateVideoInfo();
+  updateLiveMetrics();
+  showAlert(
+    `Cadence d'enregistrement confirmée : ${fps} fps — ` +
+    `source des temps : ${timeFactor().label}.`, 'success'
+  );
 }
 
 function updateVideoInfo(): void {
@@ -1235,7 +1294,7 @@ function ffmpegSetProgress(ratio: number | null): void {
 function timeFactor(): TimeFactor {
   const containerFps =
     frameIndex && frameIndex.medianInterval > 0 ? 1 / frameIndex.medianInterval : 0;
-  return determineTimeFactor(containerFps, getDuplicationFactor(), currentVideo?.fps ?? 240);
+  return determineTimeFactor(containerFps, getDuplicationFactor(), currentVideo?.fps ?? 240, fpsConfirmed);
 }
 
 /** Temps réel d'une frame depuis l'index ffmpeg (VFR-exact) */
@@ -1311,6 +1370,12 @@ async function runFfmpegAnalysis(): Promise<void> {
 
     // Étiquetage manuel : disponible dès que l'index des frames est prêt
     el.btnOpenLabeling.style.display = 'block';
+
+    // Vérification de la cadence : le conteneur seul ne suffit pas
+    // (ex. capture 240 fps exportée à 120 fps) — l'utilisateur confirme.
+    const containerFps =
+      index.medianInterval > 0 ? Math.round(1 / index.medianInterval) : currentVideo.fps;
+    showFpsConfirmPanel(containerFps);
 
     const tf = timeFactor();
     const realDuration = (index.frameCount * index.medianInterval) / tf.factor;

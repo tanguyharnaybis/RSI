@@ -60,4 +60,41 @@ describe('determineTimeFactor', () => {
     expect(result.source).toBe('manual-fps');
     expect(result.label).toContain('240');
   });
+
+  // ----- Cadence confirmée par l'utilisateur (panneau de vérification) -----
+
+  it('cadence confirmée identique au conteneur : timestamps, facteur 1', () => {
+    const result = determineTimeFactor(240, 1, 240, true);
+    expect(result.factor).toBe(1);
+    expect(result.source).toBe('timestamps');
+    expect(result.label).toContain('confirmée');
+  });
+
+  it('cadence confirmée 240 sur conteneur 120 : export étiré ×2', () => {
+    // Cas réel : capture slow-motion 240 fps exportée à 120 fps
+    const result = determineTimeFactor(120, 1, 240, true);
+    expect(result.factor).toBe(2);
+    expect(result.source).toBe('manual-fps');
+    expect(result.label).toContain('×2');
+  });
+
+  it('cadence confirmée avec duplication : facteur combiné', () => {
+    const result = determineTimeFactor(120, 2, 240, true);
+    expect(result.factor).toBe(4);
+    expect(result.source).toBe('manual-fps');
+    expect(result.label).toContain('×2');
+  });
+
+  it('cadence confirmée inférieure au conteneur : facteur plancher 1', () => {
+    const result = determineTimeFactor(240, 1, 120, true);
+    expect(result.factor).toBe(1);
+    expect(result.source).toBe('timestamps');
+  });
+
+  it('sans confirmation, le comportement automatique est inchangé', () => {
+    // Conteneur 120 ≥ 100 : timestamps présumés exacts, FPS saisi ignoré
+    const result = determineTimeFactor(120, 1, 240, false);
+    expect(result.factor).toBe(1);
+    expect(result.source).toBe('timestamps');
+  });
 });
