@@ -44,3 +44,7 @@ detection_auto_test/*.png
 detection_auto_test/*.json
 detection_auto_test/vignettes/
 detection_auto_test/*.npz
+detection_auto_test/*.jpeg
+detection_auto_test/*.pt
+__pycache__/
+.venv/
