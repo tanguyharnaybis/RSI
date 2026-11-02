@@ -86,6 +86,18 @@ export class FrameByFramePlayer implements VideoPlayer {
       this.emit('video:play');
     });
 
+    this.video.addEventListener('timeupdate', () => {
+      // Pendant la lecture : suivre la frame affichée pour le compteur,
+      // la timeline et le marquage en lecture ralentie.
+      if (!this.video.paused && !this.video.seeking) {
+        const displayed = this.frameAtVideoTime(this.video.currentTime);
+        if (displayed !== this.currentFrame) {
+          this.currentFrame = displayed;
+          this.emit('video:frame:changed', displayed);
+        }
+      }
+    });
+
     this.video.addEventListener('pause', () => {
       this.emit('video:pause');
     });
@@ -260,6 +272,18 @@ export class FrameByFramePlayer implements VideoPlayer {
    * @returns Numéro du frame
    */
   getCurrentFrame(): number {
+    return this.currentFrame;
+  }
+
+  /**
+   * Frame affichée actuellement. Pendant la lecture : frame couvrant le
+   * temps courant (permet de marquer en lecture ralentie) ; en pause :
+   * dernière frame atteinte par la navigation.
+   */
+  getDisplayedFrame(): number {
+    if (!this.video.paused && !this.video.seeking) {
+      return this.frameAtVideoTime(this.video.currentTime);
+    }
     return this.currentFrame;
   }
 

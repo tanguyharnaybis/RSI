@@ -17,6 +17,17 @@
 - Zoom sur la zone des pieds pour un marquage précis
 
 ### 🎯 Marquage et Calcul
+- **Mode « Étiquetage manuel » plein écran** : la vidéo occupe tout l'écran,
+  avec un widget de marquage déplaçable au doigt (position mémorisée) :
+  - lecture ralentie (×0,25 / ×0,5 / ×1) et navigation frame par frame ;
+  - marquage **pendant la lecture** sans mise en pause (raccourcis 1 / 2 / 3) ;
+  - métriques (contact, vol, hauteur, RSI) recalculées en direct dès que les
+    3 marqueurs sont posés ;
+  - mode **« contact partagé » (pogo jumps)** : l'atterrissage final d'un saut
+    devient automatiquement l'atterrissage du saut suivant (option
+    désactivable pour les drop jumps purs) ;
+  - raccourcis clavier : 1 / 2 / 3 marquer · Entrée valider · ← / → frame ·
+    Maj+← / → 10 frames · Échap fermer.
 - Marquage des 3 frames clés : atterrissage, décollage, atterrissage final
 - Calcul automatique du RSI avec les formules :
   - **Temps de contact** = (frame_decollage - frame_atterrissage) / fps
@@ -25,35 +36,6 @@
   - **RSI** = hauteur / temps_de_contact
   - **RSI modifié** = hauteur / temps_total
 - Affichage des résultats en temps réel
-
-### 🤖 Détection automatique par pose IA (MediaPipe)- Pipeline **MediaPipe Pose** (`@mediapipe/tasks-vision`, modèle
-  `pose_landmarker_full.task` servi localement — aucun appel réseau externe) :
-  - landmarks du pied extraits frame par frame : chevilles (27/28), talons
-    (29/30), pointes (31/32) — en pogo jump, la pointe est le premier et le
-    dernier point de contact ;
-  - ligne de sol estimée par moyenne glissante des positions minimales stables
-    de la pointe pendant les appuis ;
-  - détection des croisements du seuil de sol avec epsilon adaptatif au bruit
-    mesuré, trajectoire lissée (moyenne mobile) ;
-  - **sous-frame** : régression linéaire sur 3-4 frames autour de chaque
-    événement → instant du croisement interpolé à la milliseconde ;
-  - reconstruction **cyclique** des pogo jumps : une seule timeline d'événements
-    alternés contact/vol, l'atterrissage final d'un saut est le premier contact
-    du suivant (aucun doublon) ; vol initial et contact final incomplet ignorés ;
-    cycles hors bornes (contact < 80 ms ou > 400 ms, vol < 100 ms ou > 600 ms)
-    **proposés avec un avertissement** — jamais supprimés automatiquement, pour
-    préserver le partage des contacts entre sauts successifs ; seuls les
-    chevauchements et événements désordonnés sont rejetés.
-- **Validation manuelle obligatoire (hybride)** : l'IA propose, vous validez —
-  liste des sauts proposés, ajustement frame par frame (◀/▶) pour chaque
-  événement, métriques recalculées en direct, overlay des landmarks du pied sur
-  la vidéo (vert si visibilité ≥ 0.6, orange sinon), boutons « Valider ce saut »,
-  « Tout valider », « Rejeter ce saut ». Les corrections sont enregistrées avec
-  la session.
-- Extraction des frames par le moteur ffmpeg par morceaux (mémoire bornée) avec
-  `-fps_mode passthrough` : chaque frame décodée sort exactement une fois, et
-  validation stricte du nombre de frames extraites.
-
 
 ### 📊 Gestion des Sessions
 - Création de sessions avec nom et hauteur de drop
@@ -80,28 +62,11 @@
 
 ## 🧪 Labo de détection (développement uniquement)
 
-Le fichier **`lab.html`** (page de développement, **non incluse dans le build
-ni déployée**) permet d'expérimenter sur la précision de la détection avec une
-vidéo test locale avant d'intégrer les changements dans la PWA :
-
-```bash
-npm run dev
-# puis ouvrir http://localhost:3000/lab.html
-```
-
-- import d'une vidéo test (elle reste sur votre PC — rien n'est envoyé ni déployé ;
-  vous pouvez la ranger dans `lab-videos/`, ignoré par git) ;
-- visualisation complète : trajectoire de la pointe (brute et lissée), ligne de
-  sol, seuil sol − epsilon, événements (premiers contacts / décollages), phases
-  contact/vol, landmarks du pied superposés à la vidéo ;
-- **paramètres réglables en direct** (recalcul instantané sans réextraire la
-  pose) : fenêtre de lissage, fenêtre de ligne de sol, facteur epsilon, seuil
-  de vitesse du décollage, critère d'arrêt au contact (activable/désactivable),
-  bornes contact/vol, frame de départ ;
-- tableaux des sauts reconstruits (contact, vol, hauteur, RSI, avertissements)
-  et des événements (cliquables pour se positionner sur la frame) ;
-- **export d'un diagnostic JSON** (paramètres + événements + sauts +
-  trajectoires) à transmettre pour ajuster l'algorithme.
+L'expérimentation sur la détection automatique est mise en dehors de la PWA :
+le dossier **`detection_auto_test/`** (scripts Python, vidéos et sorties jamais
+commités) sert de terrain de recherche. Le module pur
+**`src/pose/pogoEvents.ts`** (pipeline pogo testé, sans MediaPipe) et ses tests
+sont conservés pour une future réintégration.
 
 ## 📦 Structure du Projet
 

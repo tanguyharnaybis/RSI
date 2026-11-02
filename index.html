@@ -166,40 +166,100 @@
       transform-origin: 50% 85%;
     }
     .video-wrapper.zoomed video { transform: scale(2); }
-    #pose-overlay {
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
-      pointer-events: none;
-    }
 
-    /* ---------- Pose IA (validation) ---------- */
-    .pose-jump-row {
+    /* ---------- Overlay d'étiquetage plein écran ---------- */
+    #labeling-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      display: flex;
+      flex-direction: column;
+      background: #050508;
+    }
+    #labeling-overlay[hidden] { display: none; }
+    .labeling-topbar {
       display: flex;
       align-items: center;
-      gap: 8px;
-      padding: 8px 10px;
-      margin: 6px 0;
-      border: 1px solid var(--border);
-      border-radius: 10px;
+      gap: 10px;
+      padding: 10px 14px;
       background: var(--bg-secondary);
-      cursor: pointer;
+      border-bottom: 1px solid var(--border);
+      flex: none;
     }
-    .pose-jump-row.current { border-color: var(--primary); }
-    .pose-jump-row .pj-name { font-weight: 600; white-space: nowrap; }
-    .pose-jump-row .pj-details { font-size: 0.85rem; color: var(--text-secondary); flex: 1; }
-    .pose-jump-row .pj-status { font-size: 0.85rem; white-space: nowrap; }
-    .pose-event-row {
+    #labeling-progress {
+      flex: 1;
+      font-weight: 600;
+      color: var(--primary);
+      font-size: 1rem;
+    }
+    .labeling-stage {
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 8px;
+      overflow: hidden;
+    }
+    .labeling-stage .video-wrapper {
+      width: auto;
+      aspect-ratio: auto;
+      flex: none;
+    }
+    .labeling-timeline-wrap {
+      flex: none;
+      padding: 0 14px;
+    }
+    .labeling-controls-wrap {
+      flex: none;
+      padding: 6px 14px 14px;
+    }
+    .labeling-controls-wrap .video-controls { margin-top: 0; }
+    #labeling-widget {
+      position: absolute;
+      top: 64px;
+      right: 14px;
+      width: min(320px, calc(100vw - 28px));
+      max-height: calc(100vh - 200px);
+      overflow-y: auto;
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+      z-index: 10;
+      touch-action: none;
+    }
+    #labeling-widget-handle {
       display: flex;
       align-items: center;
       gap: 8px;
-      padding: 6px 0;
+      padding: 10px 14px;
+      font-weight: 600;
+      cursor: grab;
+      user-select: none;
+      border-bottom: 1px solid var(--border);
+      touch-action: none;
     }
-    .pose-event-row .pe-label { flex: 1; font-size: 0.9rem; }
-    .pose-event-row .pe-frame { font-variant-numeric: tabular-nums; font-weight: 600; min-width: 86px; text-align: center; }
-    .pose-event-row .btn { min-width: 48px; min-height: 44px; padding: 4px 8px; }
+    #labeling-widget-handle:active { cursor: grabbing; }
+    #labeling-widget-body { padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+    #labeling-widget-body .button-grid { margin: 0; }
+    #labeling-widget-body .marker-chip { flex: 1; text-align: center; }
+    #labeling-live-metrics {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--primary);
+      min-height: 1.2em;
+    }
+    .labeling-chain-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      cursor: pointer;
+      user-select: none;
+    }
+    .labeling-chain-row input { min-width: 18px; min-height: 18px; }
 
     .video-controls {
       display: flex;
@@ -468,7 +528,6 @@
       <div id="video-section" style="display:none">
         <div class="video-wrapper" id="video-wrapper">
           <video id="video-element" playsinline muted></video>
-          <canvas id="pose-overlay" aria-hidden="true"></canvas>
         </div>
 
         <div class="video-controls">
@@ -486,37 +545,8 @@
           <span id="frame-counter">Frame 0 / 0</span>
         </div>
 
-        <!-- Détection pose IA + validation des sauts (sous la vidéo) -->
-        <button id="btn-auto-detect" class="btn btn-block" style="display:none; margin-top:12px">Détecter les sauts (IA de pose)</button>
-        <div id="pose-start-group" style="display:none; margin-top:6px; align-items:center; gap:8px; flex-wrap:wrap">
-          <button id="btn-pose-mark-start" class="btn btn-sm">Définir le contact de départ (frame courante)</button>
-          <button id="btn-pose-clear-start" class="btn btn-sm" style="display:none">Effacer</button>
-          <span id="pose-start-info" class="hint"></span>
-        </div>
-        <div id="pose-panel" style="display:none; margin-top:8px">
-          <div id="pose-status" class="hint" aria-live="polite"></div>
-          <div id="pose-progress" style="display:none; margin-top:6px; height:8px; background:var(--bg-secondary); border-radius:999px; overflow:hidden">
-            <div id="pose-progress-fill" style="height:100%; width:0%; background:var(--primary); transition:width 0.2s ease"></div>
-          </div>
-          <div id="pose-current" style="display:none">
-            <div class="button-grid" style="margin-bottom:8px">
-              <button id="btn-pose-prev-event" class="btn" title="Aller à l'événement détecté précédent">◀ Événement précédent</button>
-              <button id="btn-pose-next-event" class="btn" title="Aller à l'événement détecté suivant">Événement suivant ▶</button>
-            </div>
-            <div id="pose-event-rows"></div>
-            <p class="hint" style="margin:6px 0 0">En pogo jumps, l'événement 3 d'un saut est aussi l'événement 1 du saut suivant : ce contact est partagé, c'est normal.</p>
-            <div id="pose-cycle-warning" class="hint" style="display:none; margin:8px 0 0; color:var(--warning, #e6a23c); font-weight:600"></div>
-            <div id="pose-live-metrics" class="hint" style="font-weight:600; color:var(--primary); margin:8px 0"></div>
-            <div id="pose-visibility-warning" class="hint" style="display:none; color:var(--warning, #e6a23c)"></div>
-            <div class="button-grid">
-              <button id="btn-pose-validate" class="btn btn-primary">Valider ce saut</button>
-              <button id="btn-pose-reject" class="btn btn-danger">Rejeter ce saut</button>
-            </div>
-            <button id="btn-pose-validate-all" class="btn btn-block" style="margin-top:8px">Tout valider</button>
-          </div>
-          <div id="pose-jump-list"></div>
-          <div id="pose-rejected-list"></div>
-        </div>
+        <!-- Étiquetage manuel plein écran -->
+        <button id="btn-open-labeling" class="btn btn-primary btn-block" style="display:none; margin-top:12px">Étiquetage manuel (plein écran)</button>
 
         <div class="timeline-wrap">
           <div class="timeline" id="timeline" aria-label="Timeline vidéo">
@@ -571,9 +601,9 @@
           <select id="best-count" class="form-select"></select>
         </div>
       </div>
-      <p class="hint">Naviguez frame par frame puis marquez : 1) premier contact des orteils, 2) dernier contact au décollage, 3) nouvel atterrissage — pour <strong>chaque saut</strong>, puis validez le saut. La détection IA (bouton sous la vidéo) pré-remplit ces marqueurs.</p>
+      <p class="hint">Ouvrez « Étiquetage manuel (plein écran) » sous la vidéo pour tout faire en grand écran : lecture ralentie, navigation frame par frame et marquage — 1) premier contact des orteils, 2) dernier contact au décollage, 3) nouvel atterrissage — pour <strong>chaque saut</strong>, puis validez le saut. Les boutons ci-dessous restent utilisables hors plein écran.</p>
       <div id="jump-progress" class="hint" style="font-weight:600; color:var(--primary); margin-bottom:8px;">Saut 1 / 1</div>
-      <div class="button-grid">
+      <div class="button-grid" id="mark-buttons">
         <button id="btn-mark-landing" class="btn btn-success">1. Atterrissage</button>
         <button id="btn-mark-takeoff" class="btn btn-warning">2. Décollage</button>
         <button id="btn-mark-final-landing" class="btn btn-danger">3. Atterrissage final</button>
@@ -589,7 +619,7 @@
         d'une frame avec « ◀ Frame » puis revenez avec le bouton ci-dessous.
       </p>
       <button id="btn-return-marker" class="btn btn-sm" style="display:none; margin-top:4px">↩ Revenir au marqueur consulté</button>
-      <div style="margin-top:14px">
+      <div style="margin-top:14px" id="calculate-group">
         <button id="btn-calculate" class="btn btn-primary btn-block" disabled>Valider le saut</button>
         <button id="btn-restart-series" class="btn btn-block" style="display:none">Recommencer la série</button>
       </div>
@@ -671,6 +701,43 @@
       </p>
     </section>
 
+  </div>
+
+  <!-- Overlay d'étiquetage plein écran : la vidéo et le marquage y sont
+       déplacés dynamiquement depuis la section 1/3 à l'ouverture. -->
+  <div id="labeling-overlay" hidden role="dialog" aria-label="Étiquetage manuel des frames">
+    <header class="labeling-topbar">
+      <span id="labeling-progress">Étiquetage</span>
+      <button id="btn-finish-series" class="btn btn-primary">Terminer la série</button>
+      <button id="btn-close-labeling" class="btn" title="Fermer l'étiquetage (Échap)">✕</button>
+    </header>
+    <div class="labeling-stage" id="labeling-stage">
+      <span id="labeling-video-slot"></span>
+    </div>
+    <div class="labeling-timeline-wrap">
+      <span id="labeling-timeline-slot" style="display:block"></span>
+    </div>
+    <div class="labeling-controls-wrap">
+      <span id="labeling-controls-slot" style="display:block"></span>
+    </div>
+    <div id="labeling-widget">
+      <div id="labeling-widget-handle" title="Glisser pour déplacer">⠿ Marquage</div>
+      <div id="labeling-widget-body">
+        <div class="form-group">
+          <label for="jump-count">Sauts à mesurer</label>
+          <span id="labeling-jump-slot"></span>
+        </div>
+        <label class="labeling-chain-row" title="L'atterrissage final du saut validé devient l'atterrissage du saut suivant (pogo jumps)">
+          <input type="checkbox" id="chain-mode" checked>
+          Contact partagé (pogo)
+        </label>
+        <span id="labeling-mark-slot" style="display:block"></span>
+        <span id="labeling-chips-slot" style="display:flex; flex-wrap:wrap; gap:8px"></span>
+        <div id="labeling-live-metrics" aria-live="polite"></div>
+        <p class="hint" style="margin:0">Raccourcis : <strong>1 / 2 / 3</strong> marquer · <strong>Entrée</strong> valider · <strong>← / →</strong> frame · <strong>Échap</strong> fermer</p>
+        <span id="labeling-calc-slot" style="display:block"></span>
+      </div>
+    </div>
   </div>
 
   <div id="alert-container" aria-live="polite"></div>
