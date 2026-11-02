@@ -219,7 +219,7 @@
       position: absolute;
       top: 56px;
       right: 10px;
-      width: min(210px, calc(100vw - 20px));
+      width: min(440px, calc(100vw - 20px));
       max-height: calc(100vh - 170px);
       overflow-y: auto;
       background: var(--bg-secondary);
@@ -233,7 +233,7 @@
       display: flex;
       align-items: center;
       gap: 6px;
-      padding: 6px 10px;
+      padding: 5px 10px;
       font-size: 0.85rem;
       font-weight: 600;
       cursor: grab;
@@ -243,12 +243,12 @@
     }
     #labeling-widget-handle:active { cursor: grabbing; }
     #labeling-widget-body { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
-    #labeling-widget-body .btn { min-height: 34px; padding: 4px 8px; font-size: 0.85rem; }
-    #labeling-widget-body .button-grid { margin: 0; grid-template-columns: 1fr; gap: 6px; }
+    #labeling-widget-body .btn { min-height: 34px; padding: 4px 6px; font-size: 0.8rem; }
     #labeling-widget-body .form-select { min-height: 32px; padding: 2px 6px; font-size: 0.85rem; }
-    #labeling-widget-body .marker-chip { padding: 2px 6px; font-size: 0.72rem; text-align: center; }
-    #labeling-widget .labeling-jumps-row { display: flex; align-items: center; gap: 6px; }
-    #labeling-widget .labeling-jumps-row .jumps-label { font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); }
+    #labeling-widget-body .marker-chip { padding: 2px 6px; font-size: 0.72rem; text-align: center; min-width: 0; }
+    #labeling-widget .labeling-settings-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    #labeling-widget .jumps-label { font-size: 0.75rem; font-weight: 600; color: var(--text-secondary); }
+    #labeling-widget .labeling-settings-row .form-select { flex: 1; min-width: 90px; }
     #labeling-live-metrics {
       font-size: 0.72rem;
       font-weight: 600;
@@ -263,10 +263,17 @@
       color: var(--text-secondary);
       cursor: pointer;
       user-select: none;
+      white-space: nowrap;
     }
     .labeling-chain-row input { min-width: 16px; min-height: 16px; }
     #labeling-widget .labeling-shortcuts { margin: 0; font-size: 0.68rem; }
     @media (hover: none) { #labeling-widget .labeling-shortcuts { display: none; } }
+    /* Rangées compactes dans le widget : marquage, chips et actions */
+    #labeling-widget #mark-buttons { margin: 0; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+    #labeling-widget #marker-status { display: flex; flex-wrap: wrap; gap: 4px; }
+    #labeling-widget #marker-status .marker-chip { flex: 1; }
+    #labeling-widget #calculate-group { display: flex; gap: 6px; }
+    #labeling-widget #calculate-group .btn { flex: 1; }
 
     .video-controls {
       display: flex;
@@ -613,8 +620,7 @@
       <div class="button-grid" id="mark-buttons">
         <button id="btn-mark-landing" class="btn btn-success">1. Atterrissage</button>
         <button id="btn-mark-takeoff" class="btn btn-warning">2. Décollage</button>
-        <button id="btn-mark-final-landing" class="btn btn-danger">3. Atterrissage final</button>
-        <button id="btn-reset-markers" class="btn">Réinitialiser le saut</button>
+        <button id="btn-mark-final-landing" class="btn btn-danger span-2">3. Atterrissage final</button>
       </div>
       <div id="marker-status">
         <span class="marker-chip" id="chip-landing">Atterrissage : —</span>
@@ -628,6 +634,7 @@
       <button id="btn-return-marker" class="btn btn-sm" style="display:none; margin-top:4px">↩ Revenir au marqueur consulté</button>
       <div style="margin-top:14px" id="calculate-group">
         <button id="btn-calculate" class="btn btn-primary btn-block" disabled>Valider le saut</button>
+        <button id="btn-reset-markers" class="btn btn-block">Réinitialiser le saut</button>
         <button id="btn-restart-series" class="btn btn-block" style="display:none">Recommencer la série</button>
       </div>
     </section>
@@ -730,16 +737,16 @@
     <div id="labeling-widget">
       <div id="labeling-widget-handle" title="Glisser pour déplacer">⠿ Marquage</div>
       <div id="labeling-widget-body">
-        <div class="labeling-jumps-row">
+        <div class="labeling-settings-row">
           <span class="jumps-label">Sauts</span>
           <span id="labeling-jump-slot"></span>
+          <label class="labeling-chain-row" title="L'atterrissage final du saut validé devient l'atterrissage du saut suivant (pogo jumps)">
+            <input type="checkbox" id="chain-mode" checked>
+            Contact partagé (pogo)
+          </label>
         </div>
-        <label class="labeling-chain-row" title="L'atterrissage final du saut validé devient l'atterrissage du saut suivant (pogo jumps)">
-          <input type="checkbox" id="chain-mode" checked>
-          Contact partagé (pogo)
-        </label>
         <span id="labeling-mark-slot" style="display:block"></span>
-        <span id="labeling-chips-slot" style="display:flex; flex-direction:column; gap:4px"></span>
+        <span id="labeling-chips-slot" style="display:block"></span>
         <div id="labeling-live-metrics" aria-live="polite"></div>
         <p class="hint labeling-shortcuts">1/2/3 marquer · Entrée valider · ←/→ frame · Échap fermer</p>
         <span id="labeling-calc-slot" style="display:block"></span>
